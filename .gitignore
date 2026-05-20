@@ -1,0 +1,59 @@
+# =============================================
+# Flora Platform — .gitignore
+# =============================================
+
+# Segredos — NUNCA commitar
+.env
+keys/
+*.pem
+*.key
+*.p12
+
+# Banco de dados
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+dist/
+build/
+
+# Dados runtime
+data/
+backups/
+logs/
+*.log
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Alembic (manter estrutura, ignorar versões locais)
+# backend/migrations/versions/*.py
+# !backend/migrations/versions/.gitkeep
+
+# Temp files
+tmp/
+temp/
+.cache/

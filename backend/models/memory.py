@@ -1,26 +1,33 @@
-"""Bot Memory Model"""
+"""
+Flora Platform — Memory Model (Bot Memory per User)
+"""
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, DateTime, Text, ForeignKey, JSON
-from sqlalchemy.orm import Mapped, mapped_column
-from backend.database import Base
+from sqlalchemy import String, DateTime, Text, ForeignKey, JSON
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from backend.models.base import Base
 
 
-class BotMemory(Base):
+class Memory(Base):
     __tablename__ = "bot_memories"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    bot_id: Mapped[str] = mapped_column(String(36), ForeignKey("bots.id"), nullable=False)
-    contact_id: Mapped[str] = mapped_column(String(100), nullable=False)
-    contact_name: Mapped[str] = mapped_column(String(255), nullable=True)
-    context: Mapped[dict] = mapped_column(JSON, default=dict)
-    summary: Mapped[str] = mapped_column(Text, nullable=True)
-    message_count: Mapped[int] = mapped_column(Integer, default=0)
-    first_contact: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    last_contact: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    bot_id: Mapped[str] = mapped_column(String(36), ForeignKey("bots.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_phone: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    context: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # Relationships
+    bot: Mapped["Bot"] = relationship("Bot", back_populates="memories", lazy="select")
 
     __table_args__ = (
+        # Unique constraint: um memory key por bot+user
         {"sqlite_autoincrement": True},
     )
+
+    def __repr__(self):
+        return f"<Memory(bot={self.bot_id}, user={self.user_phone}, key={self.key})>"

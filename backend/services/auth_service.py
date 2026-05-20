@@ -1,25 +1,26 @@
-"""Auth Service"""
-from datetime import datetime, timezone
+"""
+Flora Platform — Auth Service
+"""
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from loguru import logger
 
-from backend.models.user import User
+from backend.models.user import User, UserRole
 from backend.core.security import hash_password, verify_password, create_access_token, create_refresh_token
-from backend.schemas.auth import RegisterRequest, LoginRequest
 
 
-async def register_user(db: AsyncSession, data: RegisterRequest) -> User:
-    # Check if email exists
-    result = await db.execute(select(User).where(User.email == data.email))
-    if result.scalar_one_or_none():
+async def register_user(db: AsyncSession, email: str, password: str, full_name: str = "", role: str = "user") -> User:
+    """Register a new user."""
+    existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    if existing:
         raise ValueError("Email already registered")
 
     user = User(
-        email=data.email,
-        password_hash=hash_password(data.password),
-        full_name=data.full_name,
-        role="client",
+        email=email,
+        hashed_password=hash_password(password),
+        full_name=full_name,
+        role=UserRole(role) if role in [r.value for r in UserRole] else UserRole.USER,
     )
     db.add(user)
     await db.flush()
@@ -27,42 +28,30 @@ async def register_user(db: AsyncSession, data: RegisterRequest) -> User:
     return user
 
 
-async def authenticate_user(db: AsyncSession, data: LoginRequest) -> dict:
-    result = await db.execute(select(User).where(User.email == data.email))
-    user = result.scalar_one_or_none()
+async def authenticate_user(db: AsyncSession, email: str, password: str) -> dict:
+    """Authenticate user and return tokens."""
+    user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
 
-    if not user or not verify_password(data.password, user.password_hash):
-        if user:
-            user.login_attempts += 1
-            if user.login_attempts >= 5:
-                user.locked_until = datetime.now(timezone.utc) + __import__("datetime").timedelta(minutes=30)
+    if not user or not verify_password(password, user.hashed_password):
         raise ValueError("Invalid email or password")
-
-    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
-        raise ValueError("Account is locked. Try again later.")
 
     if not user.is_active:
         raise ValueError("Account is deactivated")
 
-    # Reset attempts on success
-    user.login_attempts = 0
-    user.last_login_at = datetime.now(timezone.utc)
+    user.last_login = datetime.now(timezone.utc)
 
-    access_token = create_access_token(user.id, user.role)
+    access_token = create_access_token(user.id, user.role.value)
     refresh_token = create_refresh_token(user.id)
 
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_in": 900,
+        "expires_in": 1800,
         "user": {
             "id": user.id,
             "email": user.email,
             "full_name": user.full_name,
-            "role": user.role,
-            "is_active": user.is_active,
-            "is_2fa_enabled": user.is_2fa_enabled,
-            "created_at": user.created_at.isoformat(),
+            "role": user.role.value,
         },
     }

@@ -1,53 +1,54 @@
-"""Plan Model"""
+"""
+Flora Platform — Plan Model
+"""
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, Integer, Float, DateTime, Text, Numeric
-from sqlalchemy.orm import Mapped, mapped_column
-from backend.database import Base
+from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, JSON
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from backend.models.base import Base
 
 
 class Plan(Base):
     __tablename__ = "plans"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=True)
-    price_monthly: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    price_yearly: Mapped[float] = mapped_column(Numeric(10, 2), nullable=True)
-    currency: Mapped[str] = mapped_column(String(3), default="BRL")
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    price_monthly: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    price_yearly: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    max_bots: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    max_messages_per_month: Mapped[int] = mapped_column(Integer, nullable=False, default=500)
+    max_intents: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    max_commands: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    max_memory_items: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    has_llm: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    llm_provider: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    llm_model: Mapped[str] = mapped_column(String(100), default="", nullable=False)
+    llm_tokens_per_day: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    has_flora_ai: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_media: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_pdf: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_image: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_audio: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_transcription: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_webhooks: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_api_access: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_analytics: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_white_label: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_campaigns: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_multi_agent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    priority_support: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    features_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
-    # Limits
-    max_bots: Mapped[int] = mapped_column(Integer, default=1)
-    max_messages_month: Mapped[int] = mapped_column(Integer, default=1000)
-    max_commands: Mapped[int] = mapped_column(Integer, default=50)
-    max_file_size_mb: Mapped[int] = mapped_column(Integer, default=5)
-    max_memory_items: Mapped[int] = mapped_column(Integer, default=100)
+    # Relationships
+    subscriptions: Mapped[list["Subscription"]] = relationship("Subscription", back_populates="plan", lazy="select")
+    licenses: Mapped[list["License"]] = relationship("License", back_populates="plan", lazy="select")
 
-    # Features
-    has_llm: Mapped[bool] = mapped_column(Boolean, default=False)
-    llm_provider: Mapped[str] = mapped_column(String(50), nullable=True)
-    llm_model: Mapped[str] = mapped_column(String(100), nullable=True)
-    llm_max_tokens: Mapped[int] = mapped_column(Integer, default=2048)
-    has_media: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_pdf: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_image: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_audio: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_transcription: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_flora: Mapped[bool] = mapped_column(Boolean, default=False)
-    flora_model: Mapped[str] = mapped_column(String(100), nullable=True)
-    has_custom_commands: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_automations: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_webhooks: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_analytics: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_priority_support: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_whitelabel: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_api_access: Mapped[bool] = mapped_column(Boolean, default=False)
-    has_multi_device: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    # Control
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_public: Mapped[bool] = mapped_column(Boolean, default=True)
-    display_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    def __repr__(self):
+        return f"<Plan(name={self.name}, price_monthly={self.price_monthly})>"
