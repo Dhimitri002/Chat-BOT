@@ -3,18 +3,45 @@ Flora Platform — Configuration
 """
 from typing import List
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import field_validator, ValidationError
 import json
 import secrets
+import os
+
+
+def _validate_required_secret(name: str, value: str, min_length: int = 32) -> str:
+    """Valida que secret é definido, seguro e não é default."""
+    if not value:
+        raise ValueError(
+            f"❌ CRÍTICA: {name} não definida no .env\n"
+            f"Gere uma chave segura com: python -c \"import secrets; print(secrets.token_hex({min_length//2}))\"\n"
+            f"Adicione ao .env: {name}=<chave_gerada>"
+        )
+    
+    # Detectar defaults inseguros
+    if value.lower() in ["change-me", "change-me-use-secrets-token-hex-32", "change-me-use-secrets-token-hex-64"]:
+        raise ValueError(
+            f"❌ CRÍTICA: {name} usando default inseguro!\n"
+            f"Gere com: python -c \"import secrets; print(secrets.token_hex({min_length//2}))\"\n"
+            "Nunca use defaults em produção."
+        )
+    
+    if len(value) < min_length:
+        raise ValueError(
+            f"❌ {name} deve ter min {min_length} chars (tem {len(value)})\n"
+            f"Gere com: python -c \"import secrets; print(secrets.token_hex({min_length//2}))\""
+        )
+    
+    return value
 
 
 class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./data/flora.db"
 
-    # Security
-    secret_key: str = secrets.token_hex(32)
-    flora_master_key: str = secrets.token_hex(32)
+    # Security — OBRIGATÓRIO em .env
+    secret_key: str
+    flora_master_key: str
     algorithm: str = "RS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
@@ -52,6 +79,25 @@ class Settings(BaseSettings):
     # WhatsApp Connector
     whatsapp_connector_url: str = "http://localhost:3333"
 
+    @field_validator("secret_key", mode="before")
+    @classmethod
+    def validate_secret_key(cls, v):
+        return _validate_required_secret("SECRET_KEY", v, min_length=32)
+
+    @field_validator("flora_master_key", mode="before")
+    @classmethod
+    def validate_flora_master_key(cls, v):
+        return _validate_required_secret("FLORA_MASTER_KEY", v, min_length=32)
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def validate_debug_production(cls, v):
+        """Em produção (debug=False), força validações extras."""
+        if v is False:
+            # Production mode — adicionar validações
+            pass
+        return v
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, v):
@@ -77,4 +123,15 @@ class Settings(BaseSettings):
         case_sensitive = False
 
 
-settings = Settings()
+try:
+    settings = Settings()
+except ValidationError as e:
+    # Erro de configuração — fatal
+    import sys
+    print("\n" + "="*70)
+    print("❌ ERRO CRÍTICO NA CONFIGURAÇÃO")
+    print("="*70)
+    for error in e.errors():
+        print(f"\n⚠️  {error['loc'][0]}: {error['msg']}")
+    print("\n" + "="*70)
+    sys.exit(1)

@@ -23,8 +23,31 @@ from backend.models.subscription import Subscription
 from backend.models.user import User
 
 
-# Chave secreta para assinatura de licenças - DEVE ser alterada em produção
-LICENSE_SIGNING_KEY = os.getenv("LICENSE_SIGNING_KEY", "flora-license-secret-change-me")
+def _validate_license_signing_key():
+    """Valida que LICENSE_SIGNING_KEY está configurado com valor seguro."""
+    key = os.getenv("LICENSE_SIGNING_KEY")
+    if not key:
+        raise ValueError(
+            "❌ CRÍTICA: LICENSE_SIGNING_KEY não definida no .env\n"
+            "Gere uma chave segura com: python -c \"import secrets; print(secrets.token_hex(64))\"\n"
+            "Adicione ao .env: LICENSE_SIGNING_KEY=<chave_gerada>"
+        )
+    if key == "flora-license-secret-change-me":
+        raise ValueError(
+            "❌ CRÍTICA: LICENSE_SIGNING_KEY usando default inseguro!\n"
+            "Gere uma chave segura com: python -c \"import secrets; print(secrets.token_hex(64))\"\n"
+            "Nunca use defaults em produção."
+        )
+    if len(key) < 32:
+        raise ValueError(
+            f"❌ LICENSE_SIGNING_KEY deve ter min 32 chars (tem {len(key)})\n"
+            "Gere com: python -c \"import secrets; print(secrets.token_hex(64))\""
+        )
+
+
+# Validar secrets no import (fail-fast em produção)
+_validate_license_signing_key()
+LICENSE_SIGNING_KEY = os.getenv("LICENSE_SIGNING_KEY")
 LICENSE_GRACE_PERIOD_HOURS = int(os.getenv("LICENSE_GRACE_PERIOD_HOURS", "24"))
 
 
