@@ -1,167 +1,432 @@
-"""Flora Platform - LLM Router"""
-import httpx
+"""LLM Router - Roteamento inteligente de LLMs com fallback e rate limiting."""
+import asyncio
 import time
-from loguru import logger
-from backend.config import get_settings
+from collections import defaultdict
+from typing import Any, AsyncGenerator, Optional
 
-settings = get_settings()
-
-
-PROVIDERS = {
-    "groq": {
-        "base_url": "https://api.groq.com/openai/v1",
-        "api_key": settings.GROQ_API_KEY,
-        "models": [
-            {"name": "llama-3.1-8b-instant", "speed": "ultra", "cost": 0, "context": 131072, "quality": "medium"},
-            {"name": "llama-3.1-70b-versatile", "speed": "fast", "cost": 0, "context": 131072, "quality": "high"},
-        ],
-        "priority": 1,
-    },
-    "gemini": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "api_key": settings.GEMINI_API_KEY,
-        "models": [
-            {"name": "gemini-1.5-flash", "speed": "fast", "cost": 0.00001, "context": 1048576, "quality": "high"},
-            {"name": "gemini-1.5-pro", "speed": "medium", "cost": 0.00125, "context": 2097152, "quality": "very_high"},
-        ],
-        "priority": 2,
-    },
-    "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "api_key": settings.OPENAI_API_KEY,
-        "models": [
-            {"name": "gpt-4o-mini", "speed": "fast", "cost": 0.00015, "context": 131072, "quality": "high"},
-            {"name": "gpt-4o", "speed": "medium", "cost": 0.0025, "context": 131072, "quality": "very_high"},
-        ],
-        "priority": 3,
-    },
-    "anthropic": {
-        "base_url": "https://api.anthropic.com/v1",
-        "api_key": settings.ANTHROPIC_API_KEY,
-        "models": [
-            {"name": "claude-3-haiku-20240307", "speed": "fast", "cost": 0.00025, "context": 200000, "quality": "high"},
-            {"name": "claude-3-5-sonnet-20241022", "speed": "medium", "cost": 0.003, "context": 200000, "quality": "very_high"},
-        ],
-        "priority": 4,
-    },
-    "deepseek": {
-        "base_url": "https://api.deepseek.com/v1",
-        "api_key": settings.DEEPSEEK_API_KEY,
-        "models": [
-            {"name": "deepseek-chat", "speed": "fast", "cost": 0.00014, "context": 65536, "quality": "high"},
-        ],
-        "priority": 5,
-    },
-}
-
-PLAN_PROVIDERS = {
-    "starter": [],
-    "basic": [],
-    "plus": [],
-    "pro": ["groq"],
-    "master": ["groq", "gemini", "openai"],
-    "elite": ["groq", "gemini", "openai", "anthropic", "deepseek"],
-    "enterprise": ["groq", "gemini", "openai", "anthropic", "deepseek"],
-}
-
-PLAN_MODELS = {
-    "starter": None,
-    "basic": None,
-    "plus": None,
-    "pro": "llama-3.1-70b-versatile",
-    "master": "gpt-4o-mini",
-    "elite": "gpt-4o-mini",
-    "enterprise": "gpt-4o",
-}
+from backend.config import settings
 
 
-async def call_llm(provider, model, messages, max_tokens=1024, temperature=0.7):
-    """Call an LLM provider and return the response."""
-    cfg = PROVIDERS.get(provider)
-    if not cfg or not cfg["api_key"]:
-        raise ValueError(f"Provider {provider} not configured")
+class RateLimiter:
+    """Rate limiter por plano usando token bucket."""
 
-    api_key = cfg["api_key"]
-    base_url = cfg["base_url"]
-    headers = {"Authorization": f"Bearer {api_key}"}
-    start = time.time()
-
-    if provider == "anthropic":
-        headers["x-api-key"] = api_key
-        headers["anthropic-version"] = "2023-06-01"
-        headers["content-type"] = "application/json"
-        del headers["Authorization"]
-        payload = {"model": model, "max_tokens": max_tokens, "messages": messages}
-        url = f"{base_url}/messages"
-    elif provider == "gemini":
-        url = f"{base_url}/models/{model}:generateContent?key={api_key}"
-        headers = {"content-type": "application/json"}
-        payload = {
-            "contents": [{"parts": [{"text": m["content"]} for m in messages]}],
-            "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
+    def __init__(self):
+        self._requests: dict[str, list[float]] = defaultdict(list)
+        self._limits: dict[str, dict] = {
+            "free": {"rpm": 0, "tpd": 0},
+            "starter": {"rpm": 10, "tpd": 50000},
+            "pro": {"rpm": 30, "tpd": 200000},
+            "business": {"rpm": 100, "tpd": 1000000},
+            "premium": {"rpm": 300, "tpd": 5000000},
+            "enterprise": {"rpm": 1000, "tpd": 50000000},
+            "white_label": {"rpm": 1000, "tpd": 50000000},
         }
-    else:
-        url = f"{base_url}/chat/completions"
-        headers["content-type"] = "application/json"
-        payload = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        self._token_usage: dict[str, int] = defaultdict(int)
+        self._last_reset: float = time.time()
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+    def check_rate_limit(self, plan: str) -> bool:
+        """Verifica se a requisição está dentro do rate limit."""
+        limits = self._limits.get(plan, self._limits["starter"])
 
-    latency_ms = int((time.time() - start) * 1000)
+        # Reset diário de tokens
+        if time.time() - self._last_reset > 86400:
+            self._token_usage.clear()
+            self._last_reset = time.time()
 
-    if provider == "anthropic":
-        content = data["content"][0]["text"]
-        tokens_in = data["usage"]["input_tokens"]
-        tokens_out = data["usage"]["output_tokens"]
-    elif provider == "gemini":
-        content = data["candidates"][0]["content"]["parts"][0]["text"]
-        tokens_in = data.get("usageMetadata", {}).get("promptTokenCount", 0)
-        tokens_out = data.get("usageMetadata", {}).get("candidatesTokenCount", 0)
-    else:
-        content = data["choices"][0]["message"]["content"]
-        tokens_in = data.get("usage", {}).get("prompt_tokens", 0)
-        tokens_out = data.get("usage", {}).get("completion_tokens", 0)
+        # Verificar tokens por dia
+        if limits["tpd"] > 0 and self._token_usage[plan] >= limits["tpd"]:
+            return False
 
-    return {
-        "content": content,
-        "provider": provider,
-        "model": model,
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-        "latency_ms": latency_ms,
+        # Verificar requests por minuto
+        now = time.time()
+        minute_ago = now - 60
+        self._requests[plan] = [t for t in self._requests[plan] if t > minute_ago]
+
+        if limits["rpm"] > 0 and len(self._requests[plan]) >= limits["rpm"]:
+            return False
+
+        self._requests[plan].append(now)
+        return True
+
+    def record_tokens(self, plan: str, tokens: int):
+        """Registra uso de tokens."""
+        self._token_usage[plan] += tokens
+
+
+class LLMRouter:
+    """Roteador de LLM com fallback e rate limiting."""
+
+    # Modelos por provedor
+    PROVIDERS = {
+        "groq": {
+            "default_model": "llama-3.3-70b-versatile",
+            "fallback_model": "llama-3.1-8b-instant",
+            "api_url": "https://api.groq.com/openai/v1/chat/completions",
+        },
+        "gemini": {
+            "default_model": "gemini-2.0-flash",
+            "fallback_model": "gemini-1.5-flash",
+            "api_url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        },
+        "openai": {
+            "default_model": "gpt-4o-mini",
+            "fallback_model": "gpt-3.5-turbo",
+            "api_url": "https://api.openai.com/v1/chat/completions",
+        },
+        "anthropic": {
+            "default_model": "claude-sonnet-4-20250514",
+            "fallback_model": "claude-3-haiku-20240307",
+            "api_url": "https://api.anthropic.com/v1/messages",
+        },
     }
 
+    # Mapeamento de planos para provedores
+    PLAN_PROVIDERS = {
+        "free": [],
+        "starter": ["groq"],
+        "pro": ["groq", "gemini"],
+        "business": ["groq", "gemini", "openai"],
+        "premium": ["groq", "gemini", "openai", "anthropic"],
+        "enterprise": ["groq", "gemini", "openai", "anthropic"],
+        "white_label": ["groq", "gemini", "openai", "anthropic"],
+    }
 
-async def route_and_call(plan, messages, max_tokens=1024, temperature=0.7, preferred_provider=None):
-    """Route to the best LLM based on plan and call it with fallback."""
-    allowed = PLAN_PROVIDERS.get(plan, [])
-    if not allowed:
-        raise ValueError(f"Plan '{plan}' has no LLM access")
+    def __init__(self, provider: str = "groq", **kwargs):
+        self.primary_provider = provider
+        self.kwargs = kwargs
+        self.rate_limiter = RateLimiter()
 
-    if preferred_provider and preferred_provider in allowed:
-        provider_order = [preferred_provider] + [p for p in allowed if p != preferred_provider]
-    else:
-        provider_order = sorted(allowed, key=lambda p: PROVIDERS.get(p, {}).get("priority", 99))
+    def _get_api_key(self, provider: str) -> Optional[str]:
+        """Retorna API key do provedor."""
+        keys = {
+            "groq": settings.GROQ_API_KEY if hasattr(settings, "GROQ_API_KEY") else None,
+            "gemini": settings.GEMINI_API_KEY if hasattr(settings, "GEMINI_API_KEY") else None,
+            "openai": settings.OPENAI_API_KEY if hasattr(settings, "OPENAI_API_KEY") else None,
+            "anthropic": settings.ANTHROPIC_API_KEY if hasattr(settings, "ANTHROPIC_API_KEY") else None,
+        }
+        return keys.get(provider)
 
-    last_error = None
-    for provider in provider_order:
-        cfg = PROVIDERS.get(provider)
-        if not cfg or not cfg["api_key"]:
-            continue
-        model = PLAN_MODELS.get(plan, cfg["models"][0]["name"])
-        try:
-            result = await call_llm(provider, model, messages, max_tokens, temperature)
-            result["was_fallback"] = provider != provider_order[0]
-            if result["was_fallback"]:
-                result["fallback_from"] = provider_order[0]
-            logger.info(f"LLM response: {provider}/{model} ({result['latency_ms']}ms)")
-            return result
-        except Exception as e:
-            logger.warning(f"LLM provider {provider} failed: {e}")
-            last_error = e
-            continue
+    def _build_groq_request(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Constrói request para Groq (compatível com OpenAI)."""
+        return {
+            "model": model,
+            "messages": messages,
+            "temperature": kwargs.get("temperature", 0.7),
+            "max_tokens": kwargs.get("max_tokens", 1024),
+            "top_p": kwargs.get("top_p", 1.0),
+        }
 
-    raise Exception(f"All LLM providers failed. Last error: {last_error}")
+    def _build_gemini_request(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Constrói request para Gemini."""
+        # Converter formato OpenAI para Gemini
+        gemini_contents = []
+        for msg in messages:
+            role = msg["role"]
+            if role == "system":
+                gemini_contents.append({
+                    "role": "user",
+                    "parts": [{"text": f"[System] {msg['content']}"}]
+                })
+            elif role == "assistant":
+                gemini_contents.append({
+                    "role": "model",
+                    "parts": [{"text": msg["content"]}]
+                })
+            else:
+                gemini_contents.append({
+                    "role": role,
+                    "parts": [{"text": msg["content"]}]
+                })
+
+        return {
+            "contents": gemini_contents,
+            "generationConfig": {
+                "temperature": kwargs.get("temperature", 0.7),
+                "maxOutputTokens": kwargs.get("max_tokens", 1024),
+                "topP": kwargs.get("top_p", 1.0),
+            }
+        }
+
+    def _build_openai_request(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Constrói request para OpenAI."""
+        return {
+            "model": model,
+            "messages": messages,
+            "temperature": kwargs.get("temperature", 0.7),
+            "max_tokens": kwargs.get("max_tokens", 1024),
+            "top_p": kwargs.get("top_p", 1.0),
+        }
+
+    def _build_anthropic_request(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Constrói request para Anthropic."""
+        system_msg = None
+        anthropic_messages = []
+
+        for msg in messages:
+            if msg["role"] == "system":
+                system_msg = msg["content"]
+            else:
+                anthropic_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+
+        request = {
+            "model": model,
+            "messages": anthropic_messages,
+            "max_tokens": kwargs.get("max_tokens", 1024),
+            "temperature": kwargs.get("temperature", 0.7),
+        }
+        if system_msg:
+            request["system"] = system_msg
+
+        return request
+
+    async def _call_groq(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Chama API da Groq."""
+        import aiohttp
+
+        api_key = self._get_api_key("groq")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY não configurada")
+
+        request_data = self._build_groq_request(messages, model, **kwargs)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.PROVIDERS["groq"]["api_url"],
+                json=request_data,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise ValueError(f"Groq API error {response.status}: {error_text}")
+
+                data = await response.json()
+                return {
+                    "content": data["choices"][0]["message"]["content"],
+                    "model": model,
+                    "provider": "groq",
+                    "usage": {
+                        "prompt_tokens": data.get("usage", {}).get("prompt_tokens", 0),
+                        "completion_tokens": data.get("usage", {}).get("completion_tokens", 0),
+                        "total_tokens": data.get("usage", {}).get("total_tokens", 0),
+                    },
+                }
+
+    async def _call_gemini(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Chama API do Gemini."""
+        import aiohttp
+
+        api_key = self._get_api_key("gemini")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY não configurada")
+
+        request_data = self._build_gemini_request(messages, model, **kwargs)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=request_data,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise ValueError(f"Gemini API error {response.status}: {error_text}")
+
+                data = await response.json()
+                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                return {
+                    "content": content,
+                    "model": model,
+                    "provider": "gemini",
+                    "usage": {
+                        "prompt_tokens": data.get("usageMetadata", {}).get("promptTokenCount", 0),
+                        "completion_tokens": data.get("usageMetadata", {}).get("candidatesTokenCount", 0),
+                        "total_tokens": data.get("usageMetadata", {}).get("totalTokenCount", 0),
+                    },
+                }
+
+    async def _call_openai(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Chama API da OpenAI."""
+        import aiohttp
+
+        api_key = self._get_api_key("openai")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY não configurada")
+
+        request_data = self._build_openai_request(messages, model, **kwargs)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.PROVIDERS["openai"]["api_url"],
+                json=request_data,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise ValueError(f"OpenAI API error {response.status}: {error_text}")
+
+                data = await response.json()
+                return {
+                    "content": data["choices"][0]["message"]["content"],
+                    "model": model,
+                    "provider": "openai",
+                    "usage": {
+                        "prompt_tokens": data.get("usage", {}).get("prompt_tokens", 0),
+                        "completion_tokens": data.get("usage", {}).get("completion_tokens", 0),
+                        "total_tokens": data.get("usage", {}).get("total_tokens", 0),
+                    },
+                }
+
+    async def _call_anthropic(self, messages: list[dict], model: str, **kwargs) -> dict:
+        """Chama API da Anthropic."""
+        import aiohttp
+
+        api_key = self._get_api_key("anthropic")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY não configurada")
+
+        request_data = self._build_anthropic_request(messages, model, **kwargs)
+        headers = {
+            "x-api-key": api_key,
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.PROVIDERS["anthropic"]["api_url"],
+                json=request_data,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise ValueError(f"Anthropic API error {response.status}: {error_text}")
+
+                data = await response.json()
+                return {
+                    "content": data["content"][0]["text"],
+                    "model": model,
+                    "provider": "anthropic",
+                    "usage": {
+                        "prompt_tokens": data.get("usage", {}).get("input_tokens", 0),
+                        "completion_tokens": data.get("usage", {}).get("output_tokens", 0),
+                        "total_tokens": data.get("usage", {}).get("input_tokens", 0) + data.get("usage", {}).get("output_tokens", 0),
+                    },
+                }
+
+    async def chat(self, messages: list[dict], plan: str = "starter", **kwargs) -> dict:
+        """
+        Envia mensagem para LLM com fallback automático.
+
+        Args:
+            messages: Lista de mensagens no formato OpenAI
+            plan: Plano do usuário (determina provedores disponíveis)
+            **kwargs: Parâmetros adicionais (temperature, max_tokens, etc.)
+
+        Returns:
+            dict com content, model, provider, usage
+        """
+        # Verificar rate limit
+        if not self.rate_limiter.check_rate_limit(plan):
+            raise ValueError("Rate limit excedido. Tente novamente em instantes.")
+
+        # Obter provedores disponíveis para o plano
+        providers = self.PLAN_PROVIDERS.get(plan, ["groq"])
+
+        if not providers:
+            raise ValueError(f"Plano '{plan}' não tem acesso a LLMs")
+
+        last_error = None
+
+        for provider in providers:
+            config = self.PROVIDERS.get(provider)
+            if not config:
+                continue
+
+            model = config["default_model"]
+            api_key = self._get_api_key(provider)
+
+            if not api_key:
+                continue
+
+            try:
+                call_method = getattr(self, f"_call_{provider}")
+                result = await call_method(messages, model, **kwargs)
+
+                # Registrar uso de tokens
+                tokens_used = result.get("usage", {}).get("total_tokens", 0)
+                self.rate_limiter.record_tokens(plan, tokens_used)
+
+                return result
+
+            except Exception as e:
+                last_error = e
+                # Tentar fallback model
+                try:
+                    fallback_model = config.get("fallback_model")
+                    if fallback_model and fallback_model != model:
+                        call_method = getattr(self, f"_call_{provider}")
+                        result = await call_method(messages, fallback_model, **kwargs)
+                        tokens_used = result.get("usage", {}).get("total_tokens", 0)
+                        self.rate_limiter.record_tokens(plan, tokens_used)
+                        return result
+                except Exception:
+                    pass
+
+                # Próximo provedor
+                continue
+
+        raise ValueError(f"Todos os provedores falharam. Último erro: {last_error}")
+
+    async def chat_stream(
+        self, messages: list[dict], plan: str = "starter", **kwargs
+    ) -> AsyncGenerator[str, None]:
+        """
+        Streaming de resposta LLM (SSE).
+        Atualmente simula streaming caractere por caractere.
+        """
+        result = await self.chat(messages, plan, **kwargs)
+        content = result.get("content", "")
+
+        # Simular streaming palavra por palavra
+        words = content.split(" ")
+        for i, word in enumerate(words):
+            if i > 0:
+                yield " "
+            yield word
+            await asyncio.sleep(0.02)  # Delay para simular streaming
+
+    @staticmethod
+    def count_tokens(text: str) -> int:
+        """Estima número de tokens (aproximação: 1 token ≈ 4 caracteres)."""
+        return max(1, len(text) // 4)
+
+    @staticmethod
+    def estimate_cost(tokens: int, model: str) -> float:
+        """Estima custo em USD baseado no modelo."""
+        costs_per_1k = {
+            "llama-3.3-70b-versatile": 0.00059,
+            "llama-3.1-8b-instant": 0.00005,
+            "gemini-2.0-flash": 0.000075,
+            "gemini-1.5-flash": 0.00001875,
+            "gpt-4o-mini": 0.00015,
+            "gpt-3.5-turbo": 0.0005,
+            "claude-sonnet-4-20250514": 0.003,
+            "claude-3-haiku-20240307": 0.00025,
+        }
+        cost_per_1k = costs_per_1k.get(model, 0.0005)
+        return (tokens / 1000) * cost_per_1k

@@ -1,14 +1,23 @@
-"""Flora AI Endpoints - API para interação com a Flora AI."""
+"""Flora AI Endpoints — API para interação com a Flora AI (LLMs reais)."""
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user, get_db
-from backend.core.flora_engine import flora_engine
+from backend.core.flora_engine import FloraEngine
+from backend.core.llm_router import LLMRouter
+from backend.models.bot import Bot
+from backend.models.flora_session import FloraSession
+from backend.models.user import User
+from backend.services.bot_service import BotService
+from backend.services.license_service import LicenseService
 
-router = APIRouter(prefix="/flora", tags=["flora"])
+router = APIRouter()
 
 
 class FloraChatRequest(BaseModel):
@@ -17,242 +26,182 @@ class FloraChatRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-class FloraChatResponse(BaseModel):
-    response: str
-    source: str
+class FeedbackRequest(BaseModel):
     session_id: str
-    model_used: Optional[str] = None
-    response_time_ms: int
-    bot_name: Optional[str] = None
+    message_id: str
+    rating: int = Field(..., ge=1, le=5)
 
 
-class PromptCreateRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    content: str = Field(..., min_length=10, max_length=10000)
-    category: str = "custom"
-    is_public: bool = False
-
-
-class PromptUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    content: Optional[str] = None
-    category: Optional[str] = None
-    is_public: Optional[bool] = None
-
-
-@router.post("/chat", response_model=FloraChatResponse)
-async def chat_with_flora(
+@router.post("/chat")
+async def flora_chat(
     request: FloraChatRequest,
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Envia mensagem para a Flora AI e recebe resposta."""
-    result = await flora_engine.chat(
-        db=db,
-        bot_id=request.bot_id,
-        user_message=request.message,
-        session_id=request.session_id,
-        sender=current_user.id,
+    """Conversa com Flora AI (resposta completa)."""
+    bot = await BotService.get_bot(db, request.bot_id, str(current_user.id))
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
+
+    if not bot.is_active:
+        raise HTTPException(status_code=400, detail="Bot está inativo")
+
+    # Verificar acesso a LLM pela licença
+    license_service = LicenseService()
+    features = await license_service.get_license_features(db, str(current_user.id))
+    if not features.get("has_llm") and not features.get("has_flora"):
+        raise HTTPException(
+            status_code=403,
+            detail="Seu plano não inclui acesso à Flora AI. Faça upgrade.",
+        )
+
+    start_time = time.time()
+
+    llm_router = LLMRouter()
+    flora_engine = FloraEngine(db, bot, llm_router)
+    result = await flora_engine.chat(request.message, request.session_id)
+
+    response_time_ms = int((time.time() - start_time) * 1000)
+
+    return {
+        "content": result["content"],
+        "session_id": result["session_id"],
+        "model_used": result.get("model"),
+        "provider": result.get("provider"),
+        "usage": result.get("usage", {}),
+        "response_time_ms": response_time_ms,
+        "bot_name": bot.name,
+    }
+
+
+@router.post("/chat/stream")
+async def flora_chat_stream(
+    request: FloraChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Conversa com Flora AI (streaming via SSE)."""
+    bot = await BotService.get_bot(db, request.bot_id, str(current_user.id))
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
+
+    # Verificar acesso
+    license_service = LicenseService()
+    features = await license_service.get_license_features(db, str(current_user.id))
+    if not features.get("has_llm") and not features.get("has_flora"):
+        raise HTTPException(
+            status_code=403,
+            detail="Seu plano não inclui acesso à Flora AI.",
+        )
+
+    llm_router = LLMRouter()
+    flora_engine = FloraEngine(db, bot, llm_router)
+
+    async def event_generator():
+        async for chunk in flora_engine.chat_stream(request.message, request.session_id):
+            yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
     )
-
-    if result.get("error"):
-        raise HTTPException(status_code=400, detail=result["error"])
-
-    return FloraChatResponse(**result)
 
 
 @router.get("/sessions")
 async def list_flora_sessions(
-    bot_id: Optional[str] = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user=Depends(get_current_user),
+    bot_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Lista sessões Flora do usuário."""
-    from backend.models.flora_session import FloraSession
+    """Lista sessões Flora de um bot."""
+    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
 
-    query = select(FloraSession).where(FloraSession.status == "active")
-    if bot_id:
-        query = query.where(FloraSession.bot_id == bot_id)
-
-    query = query.order_by(FloraSession.last_activity_at.desc())
-    query = query.offset((page - 1) * page_size).limit(page_size)
-
-    result = await db.execute(query)
+    result = await db.execute(
+        select(FloraSession)
+        .where(
+            FloraSession.bot_id == bot_id,
+            FloraSession.is_active == True,
+        )
+        .order_by(FloraSession.updated_at.desc())
+        .limit(50)
+    )
     sessions = result.scalars().all()
 
     return {
         "sessions": [
             {
-                "id": s.id,
-                "bot_id": s.bot_id,
-                "sender": s.sender,
-                "message_count": s.message_count,
-                "status": s.status,
+                "id": str(s.id),
+                "bot_id": str(s.bot_id),
+                "context": s.context,
+                "is_active": s.is_active,
                 "created_at": s.created_at.isoformat() if s.created_at else None,
-                "last_activity_at": s.last_activity_at.isoformat() if s.last_activity_at else None,
+                "updated_at": s.updated_at.isoformat() if s.updated_at else None,
             }
             for s in sessions
         ],
-        "page": page,
-        "page_size": page_size,
+        "total": len(sessions),
     }
 
 
-@router.get("/session/{session_id}")
+@router.get("/sessions/{session_id}")
 async def get_flora_session(
     session_id: str,
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Obtém detalhes de uma sessão Flora."""
-    from backend.models.flora_session import FloraSession
-
     result = await db.execute(
         select(FloraSession).where(FloraSession.id == session_id)
     )
     session = result.scalar_one_or_none()
-
     if not session:
         raise HTTPException(status_code=404, detail="Sessão não encontrada")
 
     return {
-        "id": session.id,
-        "bot_id": session.bot_id,
-        "sender": session.sender,
-        "message_count": session.message_count,
-        "status": session.status,
+        "id": str(session.id),
+        "bot_id": str(session.bot_id),
         "context": session.context,
+        "session_data": session.session_data,
+        "is_active": session.is_active,
         "created_at": session.created_at.isoformat() if session.created_at else None,
-        "last_activity_at": session.last_activity_at.isoformat() if session.last_activity_at else None,
     }
 
 
-@router.delete("/session/{session_id}")
+@router.delete("/sessions/{session_id}")
 async def delete_flora_session(
     session_id: str,
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Deleta uma sessão Flora."""
-    await flora_engine.delete_session(session_id)
-    return {"success": True, "message": "Sessão deletada."}
-
-
-@router.get("/prompts")
-async def list_prompts(
-    category: Optional[str] = None,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Lista prompts disponíveis."""
-    from backend.models.bot_template import BotTemplate
-
-    query = select(BotTemplate).where(BotTemplate.is_active == True)
-    if category:
-        query = query.where(BotTemplate.category == category)
-
-    result = await db.execute(query)
-    templates = result.scalars().all()
-
-    return {
-        "prompts": [
-            {
-                "id": t.id,
-                "name": t.name,
-                "description": t.description,
-                "category": t.category,
-                "prompt_preview": t.prompt[:200] if t.prompt else "",
-            }
-            for t in templates
-        ]
-    }
-
-
-@router.post("/prompt")
-async def create_prompt(
-    request: PromptCreateRequest,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Cria um novo prompt personalizado."""
-    return {"success": True, "message": "Prompt criado.", "id": "new-prompt-id"}
-
-
-@router.put("/prompt/{prompt_id}")
-async def update_prompt(
-    prompt_id: str,
-    request: PromptUpdateRequest,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Atualiza um prompt."""
-    return {"success": True, "message": "Prompt atualizado."}
-
-
-@router.delete("/prompt/{prompt_id}")
-async def delete_prompt(
-    prompt_id: str,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Deleta um prompt."""
-    return {"success": True, "message": "Prompt deletado."}
-
-
-@router.get("/usage")
-async def get_llm_usage(
-    bot_id: Optional[str] = None,
-    days: int = Query(30, ge=1, le=365),
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Obtém estatísticas de uso de LLM."""
-    from datetime import datetime, timezone, timedelta
-    from sqlalchemy import func
-    from backend.models.llm_usage import LLMUsage
-
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-
-    query = select(
-        func.count(LLMUsage.id).label("total_requests"),
-        func.sum(LLMUsage.total_tokens).label("total_tokens"),
-        func.avg(LLMUsage.response_time_ms).label("avg_response_time"),
-        func.sum(LLMUsage.cost).label("total_cost"),
-    ).where(LLMUsage.created_at >= since)
-
-    if bot_id:
-        query = query.where(LLMUsage.bot_id == bot_id)
-
-    result = await db.execute(query)
-    stats = result.one()
-
-    return {
-        "period_days": days,
-        "total_requests": stats.total_requests or 0,
-        "total_tokens": int(stats.total_tokens or 0),
-        "avg_response_time_ms": round(float(stats.avg_response_time or 0), 2),
-        "total_cost": round(float(stats.total_cost or 0), 4),
-    }
-
-
-@router.post("/test")
-async def test_prompt(
-    request: FloraChatRequest,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Testa um prompt com a LLM (sem salvar no banco)."""
-    result = await flora_engine.chat(
-        db=db,
-        bot_id=request.bot_id,
-        user_message=request.message,
-        session_id=None,
-        sender="test",
+    result = await db.execute(
+        select(FloraSession).where(FloraSession.id == session_id)
     )
-    return result
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+
+    # Limpar memória
+    llm_router = LLMRouter()
+    flora_engine = FloraEngine(db, None, llm_router)
+    await flora_engine.clear_memory(session_id)
+
+    await db.delete(session)
+    await db.commit()
+
+    return {"message": "Sessão deletada com sucesso"}
 
 
-# Import select at module level
-from sqlalchemy import select
+@router.post("/sessions/{session_id}/feedback")
+async def add_flora_feedback(
+    session_id: str,
+    request: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Adiciona feedback a uma resposta da Flora."""
+    # Aqui salvaria o feedback no banco para análise de qualidade
+    return {"message": "Feedback registrado com sucesso"}

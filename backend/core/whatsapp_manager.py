@@ -1,189 +1,201 @@
-"""
-WhatsApp Connection Manager
-Gerencia múltiplas sessões de WhatsApp, uma por bot.
-Usa o whatsapp-bot (Node.js) como bridge via subprocess + WebSocket.
-"""
+"""WhatsApp Manager - Gerenciador de conexões WhatsApp via Baileys (Node.js subprocess)."""
 import asyncio
+import base64
 import json
 import os
-import signal
 import subprocess
 import time
-import uuid
-from datetime import datetime, timezone
-from enum import Enum
-from pathlib import Path
+from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
-
-import aiohttp
-from loguru import logger
-
-
-class WhatsAppState(str, Enum):
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    PAIRING = "pairing"  # Aguardando scan do QR
-    CONNECTED = "connected"
-    ERROR = "error"
-    LOGGED_OUT = "logged_out"
+from uuid import uuid4
 
 
 class WhatsAppSession:
-    """Representa uma sessão de WhatsApp para um bot específico."""
+    """Representa uma sessão WhatsApp ativa."""
 
-    def __init__(self, bot_id: str, user_id: str, session_dir: str = "whatsapp-bot/sessions"):
+    def __init__(self, session_id: str, bot_id: str):
+        self.session_id = session_id
         self.bot_id = bot_id
-        self.user_id = user_id
-        self.session_id = str(uuid.uuid4())[:8]
-        self.state = WhatsAppState.DISCONNECTED
+        self.status = "disconnected"  # disconnected, connecting, connected, qr_required
+        self.qr_code: Optional[str] = None
+        self.qr_expires_at: Optional[datetime] = None
         self.phone_number: Optional[str] = None
-        self.bot_name: Optional[str] = None
-        self.qr_code: Optional[str] = None  # base64 image
-        self.qr_expiry: Optional[float] = None
+        self.phone_name: Optional[str] = None
         self.connected_at: Optional[datetime] = None
-        self.disconnected_at: Optional[datetime] = None
-        self.battery_level: Optional[int] = None
-        self.platform: Optional[str] = None
-        self.last_error: Optional[str] = None
-        self.reconnect_count: int = 0
-        self.max_reconnect: int = 10
-        self.reconnect_delay: float = 2.0
+        self.last_seen: Optional[datetime] = None
         self.process: Optional[subprocess.Popen] = None
-        self._event_handlers: dict[str, list[Callable]] = {}
-        self._message_queue: asyncio.Queue = asyncio.Queue()
-        self._running = False
-        self._health_check_task: Optional[asyncio.Task] = None
-        self._message_processor_task: Optional[asyncio.Task] = None
-        self.session_dir = Path(session_dir) / bot_id
-        self._ws_url: Optional[str] = None
-
-    def to_dict(self) -> dict:
-        return {
-            "bot_id": self.bot_id,
-            "session_id": self.session_id,
-            "state": self.state.value,
-            "phone_number": self.phone_number,
-            "bot_name": self.bot_name,
-            "qr_code": self.qr_code,
-            "connected_at": self.connected_at.isoformat() if self.connected_at else None,
-            "disconnected_at": self.disconnected_at.isoformat() if self.disconnected_at else None,
-            "battery_level": self.battery_level,
-            "platform": self.platform,
-            "last_error": self.last_error,
-            "reconnect_count": self.reconnect_count,
-        }
-
-    def on(self, event: str, handler: Callable):
-        if event not in self._event_handlers:
-            self._event_handlers[event] = []
-        self._event_handlers[event].append(handler)
-
-    async def emit(self, event: str, data: Any = None):
-        handlers = self._event_handlers.get(event, [])
-        for handler in handlers:
-            try:
-                if asyncio.iscoroutinefunction(handler):
-                    await handler(data)
-                else:
-                    handler(data)
-            except Exception as e:
-                logger.error(f"Event handler error for {event}: {e}")
+        self.message_handlers: list[Callable] = []
+        self.reconnect_attempts: int = 0
+        self.max_reconnect_attempts: int = 3
 
 
 class WhatsAppManager:
     """
-    Gerenciador central de sessões WhatsApp.
-    Mantém um dicionário de sessões ativas, uma por bot.
+    Gerenciador de conexões WhatsApp.
+
+    Gerencia múltiplas sessões WhatsApp via subprocessos Node.js (Baileys).
+    Cada bot pode ter uma sessão WhatsApp independente.
     """
 
-    def __init__(self, node_script: str = "whatsapp-bot/index.js", ws_port: int = 3010):
-        self.sessions: dict[str, WhatsAppSession] = {}
-        self.node_script = Path(node_script)
-        self.ws_port = ws_port
-        self._global_handlers: dict[str, list[Callable]] = {}
-        self._node_process: Optional[subprocess.Popen] = None
-        self._ws_server_task: Optional[asyncio.Task] = None
-        self._running = False
+    def __init__(self, connector_path: Optional[str] = None):
+        self._sessions: dict[str, WhatsAppSession] = {}
+        self.connector_path = connector_path or os.path.join(
+            os.path.dirname(__file__), "..", "..", "whatsapp-connector"
+        )
 
-    async def start(self):
-        """Inicia o gerenciador WhatsApp."""
-        if self._running:
-            return
-        self._running = True
-        logger.info("WhatsApp Manager iniciado")
+    def _get_session_dir(self, session_id: str) -> str:
+        """Retorna diretório de sessão."""
+        session_dir = os.path.join(self.connector_path, "sessions", session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        return session_dir
 
-        # Garantir que o diretório de sessões existe
-        Path("whatsapp-bot/sessions").mkdir(parents=True, exist_ok=True)
-
-        # Iniciar servidor WebSocket interno para comunicação com apps
-        self._ws_server_task = asyncio.create_task(self._run_ws_server())
-
-    async def stop(self):
-        """Para todas as sessões e o gerenciador."""
-        self._running = False
-
-        # Desconectar todas as sessões
-        for bot_id in list(self.sessions.keys()):
-            await self.disconnect(bot_id)
-
-        if self._ws_server_task:
-            self._ws_server_task.cancel()
-
-        if self._node_process:
-            self._node_process.terminate()
-            self._node_process.wait(timeout=5)
-
-        logger.info("WhatsApp Manager parado")
-
-    def get_or_create_session(self, bot_id: str, user_id: str) -> WhatsAppSession:
-        if bot_id not in self.sessions:
-            session = WhatsAppSession(bot_id, user_id)
-            # Registrar handlers padrão
-            session.on("qr", self._on_qr)
-            session.on("connected", self._on_connected)
-            session.on("disconnected", self._on_disconnected)
-            session.on("message", self._on_message)
-            session.on("error", self._on_error)
-            self.sessions[bot_id] = session
-        return self.sessions[bot_id]
-
-    async def connect(self, bot_id: str, user_id: str) -> WhatsAppSession:
-        """Inicia conexão WhatsApp para um bot."""
-        session = self.get_or_create_session(bot_id, user_id)
-
-        if session.state in (WhatsAppState.CONNECTED, WhatsAppState.CONNECTING, WhatsAppState.PAIRING):
-            logger.warning(f"Bot {bot_id} já está {session.state.value}")
-            return session
-
-        session.state = WhatsAppState.CONNECTING
-        session.last_error = None
-        session.qr_code = None
-
-        try:
-            # Iniciar processo Node.js para este bot
-            await self._start_node_session(session)
-            await session.emit("state_change", session.to_dict())
-        except Exception as e:
-            session.state = WhatsAppState.ERROR
-            session.last_error = str(e)
-            logger.error(f"Erro ao conectar bot {bot_id}: {e}")
-            await session.emit("error", {"bot_id": bot_id, "error": str(e)})
-
+    async def create_session(self, bot_id: str) -> WhatsAppSession:
+        """Cria uma nova sessão WhatsApp."""
+        session_id = str(uuid4())
+        session = WhatsAppSession(session_id=session_id, bot_id=bot_id)
+        self._sessions[session_id] = session
         return session
 
-    async def disconnect(self, bot_id: str):
-        """Desconecta um bot."""
-        session = self.sessions.get(bot_id)
+    async def get_session(self, session_id: str) -> Optional[WhatsAppSession]:
+        """Retorna sessão pelo ID."""
+        return self._sessions.get(session_id)
+
+    async def list_sessions(self, bot_id: Optional[str] = None) -> list[WhatsAppSession]:
+        """Lista sessões, opcionalmente filtradas por bot_id."""
+        sessions = list(self._sessions.values())
+        if bot_id:
+            sessions = [s for s in sessions if s.bot_id == bot_id]
+        return sessions
+
+    async def connect(self, session_id: str) -> dict:
+        """
+        Inicia conexão WhatsApp (gera QR Code).
+
+        Returns:
+            dict com qr_code (base64), expires_at
+        """
+        session = self._sessions.get(session_id)
         if not session:
-            return
+            raise ValueError("Sessão não encontrada")
 
-        session._running = False
+        session.status = "connecting"
+        session.reconnect_attempts = 0
 
-        # Cancelar tasks
-        if session._health_check_task:
-            session._health_check_task.cancel()
-        if session._message_processor_task:
-            session._message_processor_task.cancel()
+        try:
+            # Iniciar processo Node.js do conector
+            connector_script = os.path.join(self.connector_path, "src", "index.js")
+
+            if not os.path.exists(connector_script):
+                # Se não existe o conector Node.js, gerar QR simulado para desenvolvimento
+                return await self._generate_dev_qr(session)
+
+            session.process = subprocess.Popen(
+                [
+                    "node", connector_script,
+                    "--session-id", session_id,
+                    "--session-dir", self._get_session_dir(session_id),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE,
+            )
+
+            # Aguardar QR Code do processo
+            qr_data = await self._wait_for_qr(session)
+
+            session.status = "qr_required"
+            session.qr_code = qr_data["qr_code"]
+            session.qr_expires_at = datetime.utcnow() + timedelta(seconds=60)
+
+            return {
+                "qr_code": qr_data["qr_code"],
+                "expires_at": session.qr_expires_at.isoformat(),
+            }
+
+        except Exception as e:
+            session.status = "disconnected"
+            raise ConnectionError(f"Erro ao iniciar conexão WhatsApp: {str(e)}")
+
+    async def _generate_dev_qr(self, session: WhatsAppSession) -> dict:
+        """Gera QR Code de desenvolvimento (quando conector Node.js não existe)."""
+        import qrcode
+        from io import BytesIO
+
+        # QR Code de desenvolvimento
+        dev_data = json.dumps({
+            "session_id": session.session_id,
+            "bot_id": session.bot_id,
+            "timestamp": time.time(),
+        })
+
+        qr = qrcode.make(dev_data)
+        buffer = BytesIO()
+        qr.save(buffer, format="PNG")
+        qr_base64 = base64.b64encode(buffer.getvalue()).decode()
+
+        session.status = "qr_required"
+        session.qr_code = qr_base64
+        session.qr_expires_at = datetime.utcnow() + timedelta(minutes=5)
+
+        return {
+            "qr_code": qr_base64,
+            "expires_at": session.qr_expires_at.isoformat(),
+        }
+
+    async def _wait_for_qr(self, session: WhatsAppSession, timeout: int = 30) -> dict:
+        """Aguarda QR Code do processo Node.js."""
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            if session.process and session.process.stdout:
+                try:
+                    line = session.process.stdout.readline()
+                    if line:
+                        data = json.loads(line.decode().strip())
+                        if data.get("type") == "qr":
+                            return {"qr_code": data["qr"]}
+                except (json.JSONDecodeError, Exception):
+                    pass
+
+            await asyncio.sleep(0.5)
+
+        raise TimeoutError("Timeout aguardando QR Code")
+
+    async def check_connection(self, session_id: str) -> dict:
+        """Verifica status da conexão."""
+        session = self._sessions.get(session_id)
+        if not session:
+            return {"status": "not_found"}
+
+        # Verificar se processo ainda está rodando
+        if session.process and session.process.poll() is not None:
+            # Processo morreu
+            session.status = "disconnected"
+            session.process = None
+
+            # Tentar reconectar
+            if session.reconnect_attempts < session.max_reconnect_attempts:
+                session.reconnect_attempts += 1
+                try:
+                    await self.connect(session_id)
+                    session.status = "connecting"
+                except Exception:
+                    pass
+
+        return {
+            "status": session.status,
+            "phone_number": session.phone_number,
+            "phone_name": session.phone_name,
+            "connected_at": session.connected_at.isoformat() if session.connected_at else None,
+            "last_seen": session.last_seen.isoformat() if session.last_seen else None,
+            "reconnect_attempts": session.reconnect_attempts,
+        }
+
+    async def disconnect(self, session_id: str) -> bool:
+        """Desconecta uma sessão WhatsApp."""
+        session = self._sessions.get(session_id)
+        if not session:
+            return False
 
         # Parar processo Node.js
         if session.process:
@@ -194,333 +206,156 @@ class WhatsAppManager:
                 session.process.kill()
             except Exception:
                 pass
+            session.process = None
 
-        session.state = WhatsAppState.DISCONNECTED
-        session.disconnected_at = datetime.now(timezone.utc)
+        session.status = "disconnected"
         session.qr_code = None
-        await session.emit("state_change", session.to_dict())
-        await session.emit("disconnected", session.to_dict())
-        logger.info(f"Bot {bot_id} desconectado")
+        session.qr_expires_at = None
+        return True
 
-    async def restart(self, bot_id: str) -> WhatsAppSession:
-        """Reinicia a conexão de um bot."""
-        session = self.sessions.get(bot_id)
-        user_id = session.user_id if session else "unknown"
-        await self.disconnect(bot_id)
-        await asyncio.sleep(1)
-        return await self.connect(bot_id, user_id)
+    async def send_message(
+        self, session_id: str, to: str, message: str, message_type: str = "text"
+    ) -> dict:
+        """
+        Envia mensagem pelo WhatsApp.
 
-    async def logout(self, bot_id: str):
-        """Faz logout e limpa dados da sessão."""
-        session = self.sessions.get(bot_id)
+        Args:
+            session_id: ID da sessão
+            to: Número de destino (com código do país, ex: 5511999999999)
+            message: Texto da mensagem
+            message_type: Tipo (text, image, document)
+
+        Returns:
+            dict com message_id, status
+        """
+        session = self._sessions.get(session_id)
         if not session:
-            return
+            raise ValueError("Sessão não encontrada")
 
-        await self.disconnect(bot_id)
+        if session.status != "connected":
+            raise ConnectionError("WhatsApp não está conectado")
 
-        # Limpar diretório de sessão
-        import shutil
-        if session.session_dir.exists():
-            shutil.rmtree(session.session_dir, ignore_errors=True)
+        message_id = str(uuid4())
 
-        session.state = WhatsAppState.LOGGED_OUT
-        session.phone_number = None
-        session.bot_name = None
-        session.reconnect_count = 0
-        await session.emit("state_change", session.to_dict())
-        logger.info(f"Bot {bot_id} logout completo")
+        # Enviar via processo Node.js
+        if session.process and session.process.stdin:
+            try:
+                payload = json.dumps({
+                    "type": "send_message",
+                    "to": to,
+                    "message": message,
+                    "message_type": message_type,
+                    "message_id": message_id,
+                })
+                session.process.stdin.write(payload.encode() + b"\n")
+                session.process.stdin.flush()
+            except Exception as e:
+                raise ConnectionError(f"Erro ao enviar mensagem: {str(e)}")
 
-    def get_status(self, bot_id: str) -> Optional[dict]:
-        session = self.sessions.get(bot_id)
-        return session.to_dict() if session else None
-
-    def get_all_sessions(self) -> list[dict]:
-        return [s.to_dict() for s in self.sessions.values()]
-
-    async def send_message(self, bot_id: str, to: str, text: str) -> dict:
-        """Envia mensagem de texto."""
-        session = self.sessions.get(bot_id)
-        if not session or session.state != WhatsAppState.CONNECTED:
-            return {"success": False, "error": "Bot não está conectado"}
-
-        message_id = str(uuid.uuid4())
-        await session._message_queue.put({
-            "type": "send_message",
+        return {
             "message_id": message_id,
+            "status": "sent",
             "to": to,
-            "text": text,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+            "timestamp": datetime.utcnow().isoformat(),
+        }
 
-        logger.info(f"Mensagem enfileirada: {message_id} para {to}")
-        return {"success": True, "message_id": message_id}
+    async def handle_webhook(self, payload: dict) -> dict:
+        """
+        Processa webhook recebido do WhatsApp.
 
-    async def send_media(self, bot_id: str, to: str, media_path: str, caption: str = "") -> dict:
-        """Envia mídia (imagem, vídeo, documento)."""
-        session = self.sessions.get(bot_id)
-        if not session or session.state != WhatsAppState.CONNECTED:
-            return {"success": False, "error": "Bot não está conectado"}
+        Args:
+            payload: Dados do webhook
 
-        message_id = str(uuid.uuid4())
-        await session._message_queue.put({
-            "type": "send_media",
-            "message_id": message_id,
-            "to": to,
-            "media_path": media_path,
-            "caption": caption,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        Returns:
+            dict com resultado do processamento
+        """
+        event_type = payload.get("event")
+        session_id = payload.get("session_id")
 
-        return {"success": True, "message_id": message_id}
+        if event_type == "message":
+            # Mensagem recebida
+            message_data = payload.get("data", {})
 
-    # --- Interno ---
+            # Notificar handlers
+            session = self._sessions.get(session_id)
+            if session:
+                for handler in session.message_handlers:
+                    try:
+                        if asyncio.iscoroutinefunction(handler):
+                            await handler(message_data)
+                        else:
+                            handler(message_data)
+                    except Exception:
+                        pass
 
-    async def _start_node_session(self, session: WhatsAppSession):
-        """Inicia o processo Node.js para uma sessão."""
-        session.session_dir.mkdir(parents=True, exist_ok=True)
-
-        env = os.environ.copy()
-        env["BOT_ID"] = session.bot_id
-        env["SESSION_ID"] = session.session_id
-        env["SESSION_DIR"] = str(session.session_dir)
-        env["WS_PORT"] = str(self.ws_port)
-        env["BACKEND_URL"] = os.getenv("BACKEND_URL", "http://localhost:8000")
-
-        cmd = ["node", str(self.node_script)]
-
-        session.process = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(self.node_script.parent),
-        )
-
-        session._running = True
-
-        # Iniciar task de health check
-        session._health_check_task = asyncio.create_task(self._health_check(session))
-
-        # Iniciar task de processamento de mensagens
-        session._message_processor_task = asyncio.create_task(self._process_messages(session))
-
-        # Iniciar task de leitura do stdout do processo
-        asyncio.create_task(self._read_stdout(session))
-
-        logger.info(f"Processo Node.js iniciado para bot {session.bot_id} (PID: {session.process.pid})")
-
-    async def _read_stdout(self, session: WhatsAppSession):
-        """Lê stdout do processo Node.js e processa eventos."""
-        if not session.process or not session.process.stdout:
-            return
-
-        try:
-            while session._running and session.process.poll() is None:
-                line = await asyncio.get_event_loop().run_in_executor(
-                    None, session.process.stdout.readline
-                )
-                if not line:
-                    break
-
-                line_str = line.decode("utf-8", errors="replace").strip()
-                if not line_str:
-                    continue
-
-                try:
-                    data = json.loads(line_str)
-                    await self._handle_node_event(session, data)
-                except json.JSONDecodeError:
-                    # Log normal do Node.js
-                    logger.debug(f"[Node/{session.bot_id}] {line_str}")
-        except Exception as e:
-            logger.error(f"Erro lendo stdout do bot {session.bot_id}: {e}")
-
-    async def _handle_node_event(self, session: WhatsAppSession, data: dict):
-        """Processa eventos recebidos do processo Node.js."""
-        event_type = data.get("type")
-
-        if event_type == "qr":
-            session.state = WhatsAppState.PAIRING
-            session.qr_code = data.get("qr")
-            session.qr_expiry = time.time() + data.get("expires_in", 60)
-            await session.emit("qr", {"bot_id": session.bot_id, "qr": session.qr_code})
-            logger.info(f"QR Code gerado para bot {session.bot_id}")
+            return {"status": "processed", "type": "message"}
 
         elif event_type == "connected":
-            session.state = WhatsAppState.CONNECTED
-            session.phone_number = data.get("phone")
-            session.bot_name = data.get("name")
-            session.connected_at = datetime.now(timezone.utc)
-            session.reconnect_count = 0
-            await session.emit("connected", session.to_dict())
-            logger.info(f"Bot {session.bot_id} conectado como {session.phone_number}")
+            # Conexão estabelecida
+            if session_id in self._sessions:
+                session = self._sessions[session_id]
+                session.status = "connected"
+                session.connected_at = datetime.utcnow()
+                session.phone_number = payload.get("data", {}).get("phone_number")
+                session.phone_name = payload.get("data", {}).get("phone_name")
+                session.reconnect_attempts = 0
+
+            return {"status": "processed", "type": "connected"}
 
         elif event_type == "disconnected":
-            session.state = WhatsAppState.DISCONNECTED
-            session.disconnected_at = datetime.now(timezone.utc)
-            reason = data.get("reason", "unknown")
-            await session.emit("disconnected", {"bot_id": session.bot_id, "reason": reason})
-            logger.info(f"Bot {session.bot_id} desconectado: {reason}")
+            # Conexão perdida
+            if session_id in self._sessions:
+                session = self._sessions[session_id]
+                session.status = "disconnected"
 
-            # Tentar reconexão automática
-            if session._running and reason not in ("loggedOut", "intentional"):
-                await self._auto_reconnect(session)
+            return {"status": "processed", "type": "disconnected"}
 
-        elif event_type == "message":
-            # Mensagem recebida do WhatsApp
-            msg_data = data.get("message", {})
-            await session.emit("message", msg_data)
-            await self._route_incoming_message(session, msg_data)
+        elif event_type == "qr":
+            # QR Code atualizado
+            if session_id in self._sessions:
+                session = self._sessions[session_id]
+                session.qr_code = payload.get("data", {}).get("qr")
+                session.qr_expires_at = datetime.utcnow() + timedelta(seconds=60)
 
-        elif event_type == "message_sent":
-            # Confirmação de envio
-            await session.emit("message_sent", data)
+            return {"status": "processed", "type": "qr"}
 
-        elif event_type == "battery":
-            session.battery_level = data.get("level")
-            session.platform = data.get("platform")
+        return {"status": "unknown_event", "type": event_type}
 
-        elif event_type == "error":
-            session.last_error = data.get("error")
-            await session.emit("error", {"bot_id": session.bot_id, "error": session.last_error})
-            logger.error(f"Erro no bot {session.bot_id}: {session.last_error}")
+    def register_message_handler(self, session_id: str, handler: Callable):
+        """Registra handler para mensagens recebidas."""
+        session = self._sessions.get(session_id)
+        if session:
+            session.message_handlers.append(handler)
 
-        # Emitir mudança de estado
-        await session.emit("state_change", session.to_dict())
+    async def delete_session(self, session_id: str) -> bool:
+        """Deleta uma sessão completamente."""
+        session = self._sessions.pop(session_id, None)
+        if not session:
+            return False
 
-    async def _route_incoming_message(self, session: WhatsAppSession, msg_data: dict):
-        """Roteia mensagem recebida para o chat engine."""
-        try:
-            from backend.services.chat_service import ChatService
-            from backend.database import async_session
+        await self.disconnect(session_id)
 
-            async with async_session() as db:
-                chat_service = ChatService(db)
-                await chat_service.handle_incoming_message(
-                    bot_id=session.bot_id,
-                    sender=msg_data.get("from", ""),
-                    text=msg_data.get("body", ""),
-                    message_type=msg_data.get("type", "text"),
-                    metadata=msg_data,
-                )
-        except Exception as e:
-            logger.error(f"Erro ao rotear mensagem: {e}")
+        # Limpar arquivos de sessão
+        session_dir = self._get_session_dir(session_id)
+        if os.path.exists(session_dir):
+            import shutil
+            shutil.rmtree(session_dir, ignore_errors=True)
 
-    async def _auto_reconnect(self, session: WhatsAppSession):
-        """Tenta reconexão automática com backoff exponencial."""
-        if session.reconnect_count >= session.max_reconnect:
-            logger.warning(f"Bot {session.bot_id}: máximo de reconexões atingido")
-            session.state = WhatsAppState.ERROR
-            session.last_error = "Máximo de reconexões atingido"
-            await session.emit("state_change", session.to_dict())
-            return
+        return True
 
-        session.reconnect_count += 1
-        delay = min(session.reconnect_delay * (2 ** (session.reconnect_count - 1)), 120)
+    async def get_qr_code(self, session_id: str) -> Optional[str]:
+        """Retorna QR Code atual da sessão."""
+        session = self._sessions.get(session_id)
+        if not session:
+            return None
 
-        logger.info(f"Bot {session.bot_id}: reconectando em {delay}s (tentativa {session.reconnect_count})")
-        await asyncio.sleep(delay)
-
-        if session._running:
-            session.state = WhatsAppState.CONNECTING
-            await session.emit("state_change", session.to_dict())
+        # Verificar se QR expirou
+        if session.qr_expires_at and session.qr_expires_at < datetime.utcnow():
+            # Regenerar QR
             try:
-                await self._start_node_session(session)
-            except Exception as e:
-                logger.error(f"Erro na reconexão do bot {session.bot_id}: {e}")
+                result = await self.connect(session_id)
+                return result.get("qr_code")
+            except Exception:
+                return None
 
-    async def _health_check(self, session: WhatsAppSession):
-        """Verifica saúde da sessão periodicamente."""
-        try:
-            while session._running:
-                await asyncio.sleep(30)
-
-                # Verificar se o processo ainda está rodando
-                if session.process and session.process.poll() is not None:
-                    logger.warning(f"Processo Node.js do bot {session.bot_id} morreu")
-                    if session.state == WhatsAppState.CONNECTED:
-                        session.state = WhatsAppState.DISCONNECTED
-                        await self._auto_reconnect(session)
-
-                # Verificar QR code expirado
-                if session.state == WhatsAppState.PAIRING and session.qr_expiry:
-                    if time.time() > session.qr_expiry:
-                        logger.info(f"QR Code expirado para bot {session.bot_id}")
-                        # Solicitar novo QR
-                        if session.process and session.process.stdin:
-                            try:
-                                session.process.stdin.write(b'{"action":"refresh_qr"}\n')
-                                session.process.stdin.flush()
-                            except Exception:
-                                pass
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Erro no health check do bot {session.bot_id}: {e}")
-
-    async def _process_messages(self, session: WhatsAppSession):
-        """Processa fila de mensagens para enviar."""
-        try:
-            while session._running:
-                try:
-                    msg = await asyncio.wait_for(session._message_queue.get(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    continue
-
-                if session.process and session.process.stdin:
-                    try:
-                        data = json.dumps(msg) + "\n"
-                        session.process.stdin.write(data.encode())
-                        session.process.stdin.flush()
-                    except Exception as e:
-                        logger.error(f"Erro ao enviar mensagem para Node.js: {e}")
-        except asyncio.CancelledError:
-            pass
-
-    async def _run_ws_server(self):
-        """Servidor WebSocket interno para comunicação com apps."""
-        # Este é um placeholder - na produção usariamos websockets library
-        # Por enquanto, a comunicação é via eventos internos
-        try:
-            while self._running:
-                await asyncio.sleep(60)
-        except asyncio.CancelledError:
-            pass
-
-    # --- Handlers padrão ---
-
-    async def _on_qr(self, data):
-        await self._emit_global("qr", data)
-
-    async def _on_connected(self, data):
-        await self._emit_global("connected", data)
-
-    async def _on_disconnected(self, data):
-        await self._emit_global("disconnected", data)
-
-    async def _on_message(self, data):
-        await self._emit_global("message", data)
-
-    async def _on_error(self, data):
-        await self._emit_global("error", data)
-
-    def on_global(self, event: str, handler: Callable):
-        if event not in self._global_handlers:
-            self._global_handlers[event] = []
-        self._global_handlers[event].append(handler)
-
-    async def _emit_global(self, event: str, data: Any = None):
-        handlers = self._global_handlers.get(event, [])
-        for handler in handlers:
-            try:
-                if asyncio.iscoroutinefunction(handler):
-                    await handler(data)
-                else:
-                    handler(data)
-            except Exception as e:
-                logger.error(f"Global handler error for {event}: {e}")
-
-
-# Singleton
-whatsapp_manager = WhatsAppManager()
+        return session.qr_code

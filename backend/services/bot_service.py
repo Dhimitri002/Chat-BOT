@@ -1,75 +1,31 @@
-"""
-Flora Platform — Bot Service
-"""
-import uuid
-from datetime import datetime, timedelta, timezone
+"""Bot Service - Serviço de gerenciamento de bots com CRUD completo."""
 from typing import Optional
+from uuid import uuid4
 
-from sqlalchemy import select, func, delete
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import HTTPException, status
 
-from backend.models.bot import Bot, BotStatus
-from backend.models.intent import Intent
-from backend.models.command import Command
+from backend.models.bot import Bot
 from backend.models.message import Message
-from backend.models.whatsapp_session import WhatsAppSession
 from backend.schemas.bot import BotCreate, BotUpdate
 
 
 class BotService:
-    """Service for managing bots and their associated resources."""
+    """Serviço de gerenciamento de bots."""
 
     @staticmethod
-    async def get_bot(db: AsyncSession, bot_id: str, user_id: Optional[str] = None) -> Bot:
-        """Get a bot by its ID, optionally filtering by user_id for ownership check."""
-        query = select(Bot).where(Bot.id == bot_id)
-        if user_id is not None:
-            query = query.where(Bot.user_id == user_id)
-
-        result = await db.execute(query)
-        bot = result.scalar_one_or_none()
-
-        if not bot:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Bot not found",
-            )
-        return bot
-
-    @staticmethod
-    async def get_bots(db: AsyncSession, user_id: str, skip: int = 0, limit: int = 20) -> list[Bot]:
-        """List all bots belonging to a user with pagination."""
-        result = await db.execute(
-            select(Bot)
-            .where(Bot.user_id == user_id)
-            .order_by(Bot.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        return list(result.scalars().all())
-
-    @staticmethod
-    async def create_bot(db: AsyncSession, data: dict, user_id: str) -> Bot:
-        """Create a new bot for the given user."""
-        now = datetime.now(timezone.utc)
+    async def create_bot(db: AsyncSession, user_id: str, data: BotCreate) -> Bot:
+        """Cria um novo bot."""
         bot = Bot(
-            id=str(uuid.uuid4()),
-            name=data.get("name", "Novo Bot"),
+            id=str(uuid4()),
             user_id=user_id,
-            status=BotStatus.DISCONNECTED,
-            config=data.get("config", {}),
-            system_prompt=data.get("system_prompt", ""),
-            command_prefix=data.get("command_prefix", "/"),
-            llm_model=data.get("llm_model", ""),
-            llm_provider=data.get("llm_provider", ""),
-            llm_temperature=data.get("llm_temperature", 0.7),
-            llm_max_tokens=data.get("llm_max_tokens", 500),
-            welcome_message=data.get("welcome_message", "Olá! Como posso te ajudar?"),
-            goodbye_message=data.get("goodbye_message", "Até mais!"),
-            error_message=data.get("error_message", "Desculpe, ocorreu um erro. Tente novamente."),
-            created_at=now,
-            updated_at=now,
+            name=data.name,
+            description=data.description or "",
+            personality=data.personality or "amigável e prestativa",
+            welcome_message=data.welcome_message or f"Olá! Sou {data.name}, como posso ajudar?",
+            farewell_message=data.farewell_message or "Até logo! Foi um prazer ajudar.",
+            is_active=True,
+            config=data.config if hasattr(data, 'config') else {},
         )
         db.add(bot)
         await db.commit()
@@ -77,221 +33,144 @@ class BotService:
         return bot
 
     @staticmethod
-    async def update_bot(db: AsyncSession, bot_id: str, data: dict, user_id: str) -> Bot:
-        """Update fields of an existing bot. Only provided fields are updated."""
-        bot = await BotService.get_bot(db, bot_id, user_id)
+    async def get_bot(db: AsyncSession, bot_id: str, user_id: Optional[str] = None) -> Optional[Bot]:
+        """Busca bot por ID. Se user_id fornecido, verifica propriedade."""
+        query = select(Bot).where(Bot.id == bot_id)
+        if user_id:
+            query = query.where(Bot.user_id == user_id)
 
-        updatable_fields = {
-            "name", "config", "system_prompt", "command_prefix",
-            "llm_model", "llm_provider", "llm_temperature", "llm_max_tokens",
-            "welcome_message", "goodbye_message", "error_message", "status",
+        result = await db.execute(query)
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def list_bots(
+        db: AsyncSession, user_id: str, page: int = 1, per_page: int = 20
+    ) -> dict:
+        """Lista bots do usuário com paginação."""
+        # Count total
+        count_result = await db.execute(
+            select(func.count()).where(Bot.user_id == user_id)
+        )
+        total = count_result.scalar() or 0
+
+        # Fetch page
+        offset = (page - 1) * per_page
+        result = await db.execute(
+            select(Bot)
+            .where(Bot.user_id == user_id)
+            .order_by(Bot.created_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        )
+        bots = result.scalars().all()
+
+        return {
+            "items": bots,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": max(1, (total + per_page - 1) // per_page),
         }
 
-        for field, value in data.items():
-            if field in updatable_fields and value is not None:
-                setattr(bot, field, value)
+    @staticmethod
+    async def update_bot(
+        db: AsyncSession, bot_id: str, user_id: str, data: BotUpdate
+    ) -> Optional[Bot]:
+        """Atualiza um bot existente."""
+        bot = await BotService.get_bot(db, bot_id, user_id)
+        if not bot:
+            return None
 
-        bot.updated_at = datetime.now(timezone.utc)
+        update_data = data.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(bot, field, value)
+
         await db.commit()
         await db.refresh(bot)
         return bot
 
     @staticmethod
-    async def delete_bot(db: AsyncSession, bot_id: str, user_id: str) -> dict:
-        """Delete a bot and all its cascading resources."""
+    async def delete_bot(db: AsyncSession, bot_id: str, user_id: str) -> bool:
+        """Deleta um bot e seus dados relacionados."""
         bot = await BotService.get_bot(db, bot_id, user_id)
+        if not bot:
+            return False
 
-        # Delete associated intents
+        # Deletar mensagens relacionadas
         await db.execute(
-            delete(Intent).where(Intent.bot_id == bot_id)
-        )
-        # Delete associated commands
-        await db.execute(
-            delete(Command).where(Command.bot_id == bot_id)
+            Message.__table__.delete().where(Message.bot_id == bot_id)
         )
 
+        # Deletar bot
         await db.delete(bot)
         await db.commit()
-        return {"success": True, "message": f"Bot {bot_id} deleted successfully"}
+        return True
 
     @staticmethod
-    async def get_bot_stats(db: AsyncSession, bot_id: str, period_days: int = 30) -> dict:
-        """Get comprehensive statistics for a bot over a given period."""
-        bot = await BotService.get_bot(db, bot_id)
+    async def clone_bot(
+        db: AsyncSession, bot_id: str, user_id: str, new_name: str
+    ) -> Optional[Bot]:
+        """Clona um bot existente."""
+        original = await BotService.get_bot(db, bot_id, user_id)
+        if not original:
+            return None
 
-        since = datetime.now(timezone.utc) - timedelta(days=period_days)
+        cloned = Bot(
+            id=str(uuid4()),
+            user_id=user_id,
+            name=new_name,
+            description=f"Cópia de {original.name}",
+            personality=original.personality,
+            welcome_message=original.welcome_message,
+            farewell_message=original.farewell_message,
+            is_active=True,
+            config=original.config,
+        )
+        db.add(cloned)
+        await db.commit()
+        await db.refresh(cloned)
+        return cloned
 
-        # Total messages in period
-        total_messages = (await db.execute(
-            select(func.count(Message.id))
+    @staticmethod
+    async def get_bot_stats(db: AsyncSession, bot_id: str) -> dict:
+        """Retorna estatísticas do bot."""
+        # Total de mensagens
+        msg_count_result = await db.execute(
+            select(func.count()).where(Message.bot_id == bot_id)
+        )
+        total_messages = msg_count_result.scalar() or 0
+
+        # Usuários únicos (sessões únicas)
+        unique_users_result = await db.execute(
+            select(func.count(func.distinct(Message.session_id)))
             .where(Message.bot_id == bot_id)
-            .where(Message.created_at >= since)
-        )).scalar() or 0
+        )
+        unique_users = unique_users_result.scalar() or 0
 
-        # Inbound messages
-        inbound = (await db.execute(
-            select(func.count(Message.id))
+        # Mensagens nas últimas 24h
+        from datetime import datetime, timedelta
+        day_ago = datetime.utcnow() - timedelta(days=1)
+        recent_result = await db.execute(
+            select(func.count())
             .where(Message.bot_id == bot_id)
-            .where(Message.direction == "inbound")
-            .where(Message.created_at >= since)
-        )).scalar() or 0
-
-        # Outbound messages
-        outbound = (await db.execute(
-            select(func.count(Message.id))
-            .where(Message.bot_id == bot_id)
-            .where(Message.direction == "outbound")
-            .where(Message.created_at >= since)
-        )).scalar() or 0
-
-        # Unique users
-        unique_users = (await db.execute(
-            select(func.count(func.distinct(Message.user_phone)))
-            .where(Message.bot_id == bot_id)
-            .where(Message.created_at >= since)
-        )).scalar() or 0
-
-        # Intents matched
-        intents_matched = (await db.execute(
-            select(func.count(Message.id))
-            .where(Message.bot_id == bot_id)
-            .where(Message.intent_matched != "")
-            .where(Message.created_at >= since)
-        )).scalar() or 0
-
-        # Commands used
-        commands_used = (await db.execute(
-            select(func.count(Message.id))
-            .where(Message.bot_id == bot_id)
-            .where(Message.command_used != "")
-            .where(Message.created_at >= since)
-        )).scalar() or 0
-
-        # LLM tokens used
-        llm_tokens = (await db.execute(
-            select(func.sum(Message.llm_tokens_used))
-            .where(Message.bot_id == bot_id)
-            .where(Message.created_at >= since)
-        )).scalar() or 0
-
-        # LLM cost
-        llm_cost = (await db.execute(
-            select(func.sum(Message.llm_cost))
-            .where(Message.bot_id == bot_id)
-            .where(Message.created_at >= since)
-        )).scalar() or 0.0
-
-        # Total intents configured
-        total_intents = (await db.execute(
-            select(func.count(Intent.id))
-            .where(Intent.bot_id == bot_id)
-        )).scalar() or 0
-
-        # Total commands configured
-        total_commands = (await db.execute(
-            select(func.count(Command.id))
-            .where(Command.bot_id == bot_id)
-        )).scalar() or 0
+            .where(Message.created_at >= day_ago)
+        )
+        messages_today = recent_result.scalar() or 0
 
         return {
-            "bot_id": bot_id,
-            "period_days": period_days,
             "total_messages": total_messages,
-            "inbound_messages": inbound,
-            "outbound_messages": outbound,
             "unique_users": unique_users,
-            "intents_matched": intents_matched,
-            "commands_used": commands_used,
-            "llm_tokens_used": llm_tokens,
-            "llm_cost": float(llm_cost),
-            "total_intents": total_intents,
-            "total_commands": total_commands,
-            "bot_status": bot.status,
+            "messages_today": messages_today,
         }
 
     @staticmethod
-    async def add_intent(db: AsyncSession, bot_id: str, intent_data: dict) -> Intent:
-        """Add a new intent to a bot."""
-        # Verify bot exists
-        await BotService.get_bot(db, bot_id)
+    async def toggle_bot_active(db: AsyncSession, bot_id: str, user_id: str) -> Optional[Bot]:
+        """Alterna status ativo/inativo do bot."""
+        bot = await BotService.get_bot(db, bot_id, user_id)
+        if not bot:
+            return None
 
-        now = datetime.now(timezone.utc)
-        intent = Intent(
-            id=str(uuid.uuid4()),
-            bot_id=bot_id,
-            name=intent_data.get("name", "Novo Intent"),
-            description=intent_data.get("description", ""),
-            keywords=intent_data.get("keywords", []),
-            responses=intent_data.get("responses", []),
-            priority=intent_data.get("priority", 0),
-            is_active=intent_data.get("is_active", True),
-            match_count=0,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(intent)
+        bot.is_active = not bot.is_active
         await db.commit()
-        await db.refresh(intent)
-        return intent
-
-    @staticmethod
-    async def remove_intent(db: AsyncSession, bot_id: str, intent_id: str) -> dict:
-        """Remove an intent from a bot."""
-        result = await db.execute(
-            select(Intent).where(Intent.id == intent_id).where(Intent.bot_id == bot_id)
-        )
-        intent = result.scalar_one_or_none()
-
-        if not intent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Intent not found",
-            )
-
-        await db.delete(intent)
-        await db.commit()
-        return {"success": True, "message": f"Intent {intent_id} removed successfully"}
-
-    @staticmethod
-    async def add_command(db: AsyncSession, bot_id: str, command_data: dict) -> Command:
-        """Add a new command to a bot."""
-        # Verify bot exists
-        await BotService.get_bot(db, bot_id)
-
-        now = datetime.now(timezone.utc)
-        command = Command(
-            id=str(uuid.uuid4()),
-            bot_id=bot_id,
-            name=command_data.get("name", "Novo Comando"),
-            description=command_data.get("description", ""),
-            trigger=command_data.get("trigger", ""),
-            response=command_data.get("response", ""),
-            response_type=command_data.get("response_type", "text"),
-            is_active=command_data.get("is_active", True),
-            use_count=0,
-            version=1,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(command)
-        await db.commit()
-        await db.refresh(command)
-        return command
-
-    @staticmethod
-    async def remove_command(db: AsyncSession, bot_id: str, command_id: str) -> dict:
-        """Remove a command from a bot."""
-        result = await db.execute(
-            select(Command).where(Command.id == command_id).where(Command.bot_id == bot_id)
-        )
-        command = result.scalar_one_or_none()
-
-        if not command:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Command not found",
-            )
-
-        await db.delete(command)
-        await db.commit()
-        return {"success": True, "message": f"Command {command_id} removed successfully"}
+        await db.refresh(bot)
+        return bot

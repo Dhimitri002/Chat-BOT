@@ -1,197 +1,154 @@
-"""Chat Endpoints - API para gerenciamento de conversas."""
+"""Chat Endpoints — API para gerenciamento de conversas."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user, get_db
-from backend.schemas.common import PaginatedResponse
+from backend.core.chat_engine import ChatEngine
+from backend.models.bot import Bot
+from backend.models.message import Message
+from backend.models.user import User
+from backend.services.bot_service import BotService
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter()
 
 
 class SendMessageRequest(BaseModel):
     bot_id: str
-    to: str = Field(..., description="Número do destinatário")
-    text: str = Field(..., min_length=1, max_length=10000)
+    message: str = Field(..., min_length=1, max_length=10000)
+    session_id: Optional[str] = None
 
 
-class TransferRequest(BaseModel):
-    conversation_id: str
-    reason: Optional[str] = "Transferido pelo admin"
+class ChatHistoryRequest(BaseModel):
+    bot_id: str
+    session_id: Optional[str] = None
+    limit: int = Field(default=50, ge=1, le=200)
 
 
 @router.post("/send")
 async def send_chat_message(
     request: SendMessageRequest,
-    current_user=Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Envia mensagem de chat (via painel admin)."""
-    from backend.core.whatsapp_manager import whatsapp_manager
+    """Envia mensagem para um bot e retorna a resposta."""
+    bot = await BotService.get_bot(db, request.bot_id, str(current_user.id))
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
 
-    result = await whatsapp_manager.send_message(
-        request.bot_id, request.to, request.text
-    )
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["error"])
-    return result
+    if not bot.is_active:
+        raise HTTPException(status_code=400, detail="Bot está inativo")
+
+    chat_engine = ChatEngine(db, bot)
+    result = await chat_engine.process_message(request.message, request.session_id)
+
+    return {
+        "message_id": result.get("session_id"),
+        "content": result["content"],
+        "type": result["type"],
+        "session_id": result["session_id"],
+        "metadata": result.get("metadata", {}),
+    }
 
 
 @router.get("/history/{bot_id}")
 async def get_chat_history(
     bot_id: str,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user=Depends(get_current_user),
+    session_id: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Obtém histórico de mensagens de um bot."""
-    from backend.models.message import Message
+    """Obtém histórico de chat de um bot."""
+    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
 
-    offset = (page - 1) * page_size
-    result = await db.execute(
-        select(Message)
-        .where(Message.bot_id == bot_id)
-        .order_by(Message.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-    )
+    query = select(Message).where(Message.bot_id == bot_id)
+    if session_id:
+        query = query.where(Message.session_id == session_id)
+
+    query = query.order_by(Message.created_at.desc()).limit(limit)
+    result = await db.execute(query)
     messages = result.scalars().all()
 
-    return PaginatedResponse(
-        items=[m.to_dict() for m in messages],
-        total=len(messages),
-        page=page,
-        page_size=page_size,
-        pages=1,
-    )
+    return {
+        "messages": [
+            {
+                "id": str(m.id),
+                "content": m.content,
+                "direction": m.direction,
+                "message_type": m.message_type,
+                "metadata": m.metadata,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in reversed(messages)
+        ],
+        "total": len(messages),
+    }
 
 
-@router.get("/conversations/{bot_id}")
-async def list_conversations(
+@router.post("/reset/{bot_id}")
+async def reset_chat_session(
     bot_id: str,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user=Depends(get_current_user),
+    session_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Lista conversas de um bot."""
+    """Reseta uma sessão de chat."""
+    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
+
+    # Deletar mensagens da sessão
+    await db.execute(
+        Message.__table__.delete().where(
+            Message.bot_id == bot_id,
+            Message.session_id == session_id,
+        )
+    )
+    await db.commit()
+
+    return {"message": "Sessão resetada com sucesso"}
+
+
+@router.get("/sessions")
+async def list_chat_sessions(
+    bot_id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista sessões de chat ativas de um bot."""
+    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
+
     from sqlalchemy import func, distinct
-    from backend.models.message import Message
 
     result = await db.execute(
         select(
-            Message.sender,
+            Message.session_id,
             func.count(Message.id).label("message_count"),
             func.max(Message.created_at).label("last_message_at"),
         )
         .where(Message.bot_id == bot_id)
-        .group_by(Message.sender)
+        .group_by(Message.session_id)
         .order_by(func.max(Message.created_at).desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+        .limit(50)
     )
-    conversations = result.all()
+    sessions = result.all()
 
     return {
-        "conversations": [
+        "sessions": [
             {
-                "sender": c.sender,
-                "message_count": c.message_count,
-                "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
+                "session_id": s[0],
+                "message_count": s[1],
+                "last_message_at": s[2].isoformat() if s[2] else None,
             }
-            for c in conversations
+            for s in sessions
         ],
-        "page": page,
-        "page_size": page_size,
+        "total": len(sessions),
     }
-
-
-@router.get("/messages/{sender}")
-async def get_conversation_messages(
-    sender: str,
-    bot_id: str = Query(...),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Obtém mensagens de uma conversa específica."""
-    from backend.models.message import Message
-
-    result = await db.execute(
-        select(Message)
-        .where(Message.bot_id == bot_id, Message.sender == sender)
-        .order_by(Message.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
-    messages = result.scalars().all()
-    return {"messages": [m.to_dict() for m in messages], "page": page}
-
-
-@router.delete("/conversation/{conversation_id}")
-async def delete_conversation(
-    conversation_id: str,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Deleta uma conversa."""
-    return {"success": True, "message": "Conversa deletada."}
-
-
-@router.post("/transfer")
-async def transfer_to_human(
-    request: TransferRequest,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Transfere conversa para atendimento humano."""
-    return {"success": True, "message": "Conversa transferida para atendimento humano."}
-
-
-@router.get("/stats/{bot_id}")
-async def get_chat_stats(
-    bot_id: str,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Obtém estatísticas de chat de um bot."""
-    from sqlalchemy import func
-    from backend.models.message import Message
-
-    # Total de mensagens
-    total_result = await db.execute(
-        select(func.count(Message.id)).where(Message.bot_id == bot_id)
-    )
-    total_messages = total_result.scalar()
-
-    # Total de conversas (senders únicos)
-    conversations_result = await db.execute(
-        select(func.count(func.distinct(Message.sender))).where(Message.bot_id == bot_id)
-    )
-    total_conversations = conversations_result.scalar()
-
-    # Mensagens hoje
-    from datetime import datetime, timezone, timedelta
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_result = await db.execute(
-        select(func.count(Message.id)).where(
-            Message.bot_id == bot_id,
-            Message.created_at >= today,
-        )
-    )
-    messages_today = today_result.scalar()
-
-    return {
-        "total_messages": total_messages,
-        "total_conversations": total_conversations,
-        "messages_today": messages_today,
-        "bot_id": bot_id,
-    }
-
-
-# Import select at module level for convenience
-from sqlalchemy import select

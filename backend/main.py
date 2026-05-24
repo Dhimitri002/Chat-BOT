@@ -1,44 +1,75 @@
-"""Flora Platform — FastAPI Backend"""
+"""Flora Platform — Backend Main (FastAPI)"""
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from loguru import logger
+from starlette.middleware.sessions import SessionMiddleware
 
-from backend.config import get_settings
-from backend.database import init_db
 from backend.api.router import api_router
-from backend.scripts.seed_plans import seed_plans
-
-settings = get_settings()
+from backend.api.middleware.audit import AuditMiddleware
+from backend.api.middleware.error_handler import ErrorHandlerMiddleware
+from backend.api.middleware.rate_limit import RateLimitMiddleware
+from backend.config import settings
+from backend.database import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"🌸 {settings.APP_NAME} v{settings.APP_VERSION} starting...")
+    """Startup e shutdown da aplicação."""
+    # Startup
     await init_db()
-    logger.info("Database initialized")
+    print(f"🌸 Flora Platform iniciada — {settings.HOST}:{settings.PORT}")
     yield
-    logger.info("🌸 Flora Platform shutting down...")
+    # Shutdown
+    print("🌸 Flora Platform encerrada")
 
 
-app = FastAPI(
-    title=settings.APP_NAME,
-    version=settings.APP_VERSION,
-    description="Plataforma de chatbots licenciados para WhatsApp",
-    lifespan=lifespan,
-)
+def create_app() -> FastAPI:
+    """Factory function para criar a aplicação FastAPI."""
+    app = FastAPI(
+        title="Flora Platform",
+        description="Plataforma de Chatbots Licenciados com IA",
+        version="1.0.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        lifespan=lifespan,
+    )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # ── CORS ───────────────────────────────────────────────
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-app.include_router(api_router)
+    # ── Session ────────────────────────────────────────────
+    app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
+
+    # ── Rate Limiting ──────────────────────────────────────
+    app.add_middleware(
+        RateLimitMiddleware,
+        max_requests=settings.RATE_LIMIT_REQUESTS,
+        window_seconds=settings.RATE_LIMIT_WINDOW,
+    )
+
+    # ── Audit ──────────────────────────────────────────────
+    app.add_middleware(AuditMiddleware)
+
+    # ── Error Handler ──────────────────────────────────────
+    app.add_middleware(ErrorHandlerMiddleware)
+
+    # ── API Routes ─────────────────────────────────────────
+    app.include_router(api_router, prefix="/api/v1")
+
+    # ── Root ───────────────────────────────────────────────
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return {"message": "🌸 Flora Platform API", "docs": "/docs", "version": "1.0.0"}
+
+    return app
 
 
-@app.get("/health")
-async def health():
-    return {"status": "healthy", "app": settings.APP_NAME, "version": settings.APP_VERSION}
+# Instância da aplicação
+app = create_app()

@@ -17,6 +17,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.models.license import License
 from backend.models.plan import Plan
 from backend.models.subscription import Subscription
@@ -25,7 +26,7 @@ from backend.models.user import User
 
 def _validate_license_signing_key():
     """Valida que LICENSE_SIGNING_KEY está configurado com valor seguro."""
-    key = os.getenv("LICENSE_SIGNING_KEY")
+    key = settings.LICENSE_SIGNING_KEY
     if not key:
         raise ValueError(
             "❌ CRÍTICA: LICENSE_SIGNING_KEY não definida no .env\n"
@@ -47,8 +48,8 @@ def _validate_license_signing_key():
 
 # Validar secrets no import (fail-fast em produção)
 _validate_license_signing_key()
-LICENSE_SIGNING_KEY = os.getenv("LICENSE_SIGNING_KEY")
-LICENSE_GRACE_PERIOD_HOURS = int(os.getenv("LICENSE_GRACE_PERIOD_HOURS", "24"))
+LICENSE_SIGNING_KEY = settings.LICENSE_SIGNING_KEY
+LICENSE_GRACE_PERIOD_HOURS = 24
 
 
 def generate_license_key() -> str:

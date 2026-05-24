@@ -11,9 +11,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.config import get_settings
-
-settings = get_settings()
+from backend.config import settings
 ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=4)
 
 
