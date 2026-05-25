@@ -59,7 +59,7 @@ class FloraClienteApp(MDApp):
         self.ws_url = os.getenv("WS_URL", "ws://localhost:8000")
 
     def build(self):
-        """Constrói a aplicação."""
+        """Constroi a aplicacao."""
         self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "Blue"
         self.theme_cls.accent_palette = "Red"
@@ -89,6 +89,9 @@ class FloraClienteApp(MDApp):
         from app_cliente.screens.commands_screen import CommandsScreen
         from app_cliente.screens.whatsapp_screen import WhatsAppScreen
         from app_cliente.screens.settings_screen import SettingsScreen
+        from app_cliente.screens.flora_chat_screen import FloraChatScreen
+        from app_cliente.screens.plans_screen import PlansScreen
+        from app_cliente.screens.support_screen import SupportScreen
 
         self.screen_manager = MainScreenManager()
 
@@ -105,6 +108,9 @@ class FloraClienteApp(MDApp):
             CommandsScreen(name="commands"),
             WhatsAppScreen(name="whatsapp"),
             SettingsScreen(name="settings"),
+            FloraChatScreen(name="flora_chat"),
+            PlansScreen(name="plans"),
+            SupportScreen(name="support"),
         ]
 
         for screen in screens:
@@ -112,11 +118,10 @@ class FloraClienteApp(MDApp):
 
     def on_start(self):
         """Chamado quando o app inicia."""
-        # Verificar se já está autenticado
         self._check_auth()
 
     def _check_auth(self):
-        """Verifica se o usuário já está autenticado."""
+        """Verifica se o usuario ja esta autenticado."""
         from app_cliente.services.auth import AuthService
         auth = AuthService()
         token = auth.get_token()
@@ -132,7 +137,7 @@ class FloraClienteApp(MDApp):
             self.screen_manager.current = "login"
 
     def logout(self):
-        """Faz logout do usuário."""
+        """Faz logout do usuario."""
         from app_cliente.services.auth import AuthService
         auth = AuthService()
         auth.logout()
@@ -149,7 +154,7 @@ class FloraClienteApp(MDApp):
         self.screen_manager.current = screen_name
 
     def show_dialog(self, title: str, text: str):
-        """Mostra diálogo de alerta."""
+        """Mostra dialogo de alerta."""
         from kivymd.uix.dialog import MDDialog
         from kivymd.uix.button import MDFlatButton
 
@@ -168,7 +173,7 @@ class FloraClienteApp(MDApp):
         dialog.open()
 
     def show_snackbar(self, text: str):
-        """Mostra snackbar de notificação."""
+        """Mostra snackbar de notificacao."""
         from kivymd.uix.snackbar import MDSnackbar, MDSnackbarText
 
         snackbar = MDSnackbar(

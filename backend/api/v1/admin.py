@@ -1,413 +1,556 @@
-"""Admin Endpoints — API administrativa da plataforma."""
+"""Admin Endpoints - API para administradores da plataforma Flora."""
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from pydantic import BaseModel
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_admin, get_db
-from backend.models.bot import Bot
-from backend.models.message import Message
 from backend.models.user import User
+from backend.models.bot import Bot
 from backend.models.license import License
-from backend.models.subscription import Subscription
-from backend.services.license_service import LicenseService
+from backend.models.plan import Plan
+from backend.models.message import Message
+from backend.models.payment import Payment
+from backend.models.llm_usage import LLMUsage
+from backend.models.whatsapp_session import WhatsAppSession
 
-router = APIRouter()
-
-
-class UpdateUserRequest(BaseModel):
-    full_name: Optional[str] = None
-    is_active: Optional[bool] = None
-    role: Optional[str] = None
+router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-class BroadcastRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=5000)
-    target: str = Field(default="all")
-
-
-# ─── Dashboard ────────────────────────────────────────────
+# ── Dashboard ──────────────────────────────────────────────────────────────
 
 @router.get("/dashboard")
 async def admin_dashboard(
-    current_user: User = Depends(get_current_admin),
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Dashboard administrativo com métricas globais."""
-    # Total de usuários
-    users_count = (await db.execute(select(func.count()).select_from(User))).scalar() or 0
+    """Dashboard administrativo com metricas globais."""
 
-    # Total de bots
-    bots_count = (await db.execute(select(func.count()).select_from(Bot))).scalar() or 0
+    # Users
+    total_users_result = await db.execute(select(func.count(User.id)))
+    total_users = total_users_result.scalar() or 0
 
-    # Bots ativos
-    active_bots = (await db.execute(
-        select(func.count()).where(Bot.is_active == True)
-    )).scalar() or 0
+    active_users_result = await db.execute(
+        select(func.count(User.id)).where(User.is_active == True)
+    )
+    active_users = active_users_result.scalar() or 0
 
-    # Total de mensagens
-    messages_count = (await db.execute(select(func.count()).select_from(Message))).scalar() or 0
+    # Bots
+    total_bots_result = await db.execute(select(func.count(Bot.id)))
+    total_bots = total_bots_result.scalar() or 0
 
-    # Mensagens hoje
-    from datetime import datetime, timedelta
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    messages_today = (await db.execute(
-        select(func.count()).where(Message.created_at >= today)
-    )).scalar() or 0
+    active_bots_result = await db.execute(
+        select(func.count(Bot.id)).where(Bot.is_active == True)
+    )
+    active_bots = active_bots_result.scalar() or 0
 
-    # Licenças ativas
-    active_licenses = (await db.execute(
-        select(func.count()).where(License.status == "active")
-    )).scalar() or 0
+    # Licenses
+    total_licenses_result = await db.execute(select(func.count(License.id)))
+    total_licenses = total_licenses_result.scalar() or 0
 
-    # Assinaturas ativas
-    active_subs = (await db.execute(
-        select(func.count()).where(Subscription.status == "active")
-    )).scalar() or 0
+    active_licenses_result = await db.execute(
+        select(func.count(License.id)).where(License.status == "active")
+    )
+    active_licenses = active_licenses_result.scalar() or 0
 
-    # Usuários novos hoje
-    new_users_today = (await db.execute(
-        select(func.count()).where(User.created_at >= today)
-    )).scalar() or 0
+    now = datetime.now(timezone.utc)
+    expiring_licenses_result = await db.execute(
+        select(func.count(License.id)).where(
+            License.status == "active",
+            License.expires_at <= now,
+        )
+    )
+    expiring_licenses = expiring_licenses_result.scalar() or 0
+
+    # Revenue
+    total_revenue_result = await db.execute(
+        select(func.sum(Payment.amount)).where(Payment.status == "completed")
+    )
+    total_revenue = float(total_revenue_result.scalar() or 0)
+
+    # Messages today
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    messages_today_result = await db.execute(
+        select(func.count(Message.id)).where(Message.created_at >= today_start)
+    )
+    messages_today = messages_today_result.scalar() or 0
+
+    # LLM usage today
+    llm_today_result = await db.execute(
+        select(func.sum(LLMUsage.total_tokens)).where(LLMUsage.created_at >= today_start)
+    )
+    llm_tokens_today = llm_today_result.scalar() or 0
+
+    llm_cost_result = await db.execute(
+        select(func.sum(LLMUsage.cost)).where(LLMUsage.created_at >= today_start)
+    )
+    llm_cost_today = float(llm_cost_result.scalar() or 0)
+
+    # New users today
+    new_users_today_result = await db.execute(
+        select(func.count(User.id)).where(User.created_at >= today_start)
+    )
+    new_users_today = new_users_today_result.scalar() or 0
 
     return {
         "users": {
-            "total": users_count,
+            "total": total_users,
+            "active": active_users,
             "new_today": new_users_today,
         },
         "bots": {
-            "total": bots_count,
+            "total": total_bots,
             "active": active_bots,
         },
+        "licenses": {
+            "total": total_licenses,
+            "active": active_licenses,
+            "expiring": expiring_licenses,
+        },
+        "revenue": {
+            "total": total_revenue,
+        },
         "messages": {
-            "total": messages_count,
             "today": messages_today,
         },
-        "licenses": {
-            "active": active_licenses,
-        },
-        "subscriptions": {
-            "active": active_subs,
+        "llm": {
+            "tokens_today": llm_tokens_today,
+            "cost_today": llm_cost_today,
         },
     }
 
 
-# ─── Gestão de Usuários ───────────────────────────────────
+# ── User Management ────────────────────────────────────────────────────────
 
 @router.get("/users")
 async def admin_list_users(
     page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = None,
-    current_user: User = Depends(get_current_admin),
+    is_active: Optional[bool] = None,
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Lista todos os usuários (admin)."""
+    """Lista todos os usuarios (admin)."""
     query = select(User)
 
     if search:
         query = query.where(
-            User.email.contains(search) | User.full_name.contains(search)
+            (User.name.ilike(f"%{search}%")) | (User.email.ilike(f"%{search}%"))
         )
+    if is_active is not None:
+        query = query.where(User.is_active == is_active)
 
-    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total = count_result.scalar() or 0
+    query = query.order_by(User.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
 
-    offset = (page - 1) * per_page
-    result = await db.execute(
-        query.order_by(User.created_at.desc()).offset(offset).limit(per_page)
-    )
+    result = await db.execute(query)
     users = result.scalars().all()
 
     return {
         "users": [
             {
-                "id": str(u.id),
+                "id": u.id,
+                "name": u.name,
                 "email": u.email,
-                "full_name": u.full_name,
                 "role": u.role,
                 "is_active": u.is_active,
+                "last_login": u.last_login.isoformat() if u.last_login else None,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
             }
             for u in users
         ],
-        "total": total,
         "page": page,
-        "per_page": per_page,
+        "page_size": page_size,
     }
 
 
 @router.get("/users/{user_id}")
 async def admin_get_user(
     user_id: str,
-    current_user: User = Depends(get_current_admin),
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Obtém detalhes de um usuário."""
+    """Obtem detalhes de um usuario (admin)."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    # Contar bots do usuário
-    bots_count = (await db.execute(
-        select(func.count()).where(Bot.user_id == user_id)
-    )).scalar() or 0
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
     return {
-        "id": str(user.id),
+        "id": user.id,
+        "name": user.name,
         "email": user.email,
-        "full_name": user.full_name,
         "role": user.role,
         "is_active": user.is_active,
-        "is_verified": user.is_verified,
-        "bots_count": bots_count,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "is_2fa_enabled": user.is_2fa_enabled,
+        "avatar_url": user.avatar_url,
         "last_login": user.last_login.isoformat() if user.last_login else None,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
     }
 
 
-@router.put("/users/{user_id}/role")
-async def admin_update_user_role(
+class AdminUserUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@router.patch("/users/{user_id}")
+async def admin_update_user(
     user_id: str,
-    role: str = Query(..., regex="^(user|admin)$"),
-    current_user: User = Depends(get_current_admin),
+    data: AdminUserUpdateRequest,
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Atualiza role de um usuário."""
+    """Atualiza um usuario (admin)."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
+
     if not user:
-        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        raise HTTPException(status_code=404, detail="User not found")
 
-    user.role = role
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(user, field, value)
+
     await db.commit()
-    return {"message": f"Role atualizada para '{role}'"}
+    await db.refresh(user)
+
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+        "is_active": user.is_active,
+    }
 
 
-@router.put("/users/{user_id}/status")
-async def admin_update_user_status(
+@router.delete("/users/{user_id}")
+async def admin_delete_user(
     user_id: str,
-    is_active: bool = Query(...),
-    current_user: User = Depends(get_current_admin),
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Ativa/desativa um usuário."""
+    """Deleta um usuario (admin)."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
+
     if not user:
-        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        raise HTTPException(status_code=404, detail="User not found")
 
-    user.is_active = is_active
+    await db.delete(user)
     await db.commit()
-    return {"message": f"Usuário {'ativado' if is_active else 'desativado'}"}
+
+    return {"message": "User deleted successfully"}
 
 
-# ─── Gestão de Bots ───────────────────────────────────────
+# ── Bot Management ─────────────────────────────────────────────────────────
 
 @router.get("/bots")
 async def admin_list_bots(
     page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_admin),
+    page_size: int = Query(20, ge=1, le=100),
+    is_active: Optional[bool] = None,
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Lista todos os bots (admin)."""
-    count_result = await db.execute(select(func.count()).select_from(Bot))
-    total = count_result.scalar() or 0
+    query = select(Bot)
 
-    offset = (page - 1) * per_page
-    result = await db.execute(
-        select(Bot).order_by(Bot.created_at.desc()).offset(offset).limit(per_page)
-    )
+    if is_active is not None:
+        query = query.where(Bot.is_active == is_active)
+
+    query = query.order_by(Bot.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+
+    result = await db.execute(query)
     bots = result.scalars().all()
 
     return {
         "bots": [
             {
-                "id": str(b.id),
+                "id": b.id,
                 "name": b.name,
-                "user_id": str(b.user_id),
+                "owner_id": b.owner_id,
+                "license_id": b.license_id,
                 "is_active": b.is_active,
+                "is_connected": b.is_connected,
                 "created_at": b.created_at.isoformat() if b.created_at else None,
             }
             for b in bots
         ],
-        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 
-# ─── Sistema ──────────────────────────────────────────────
-
-@router.get("/system/events")
-async def admin_system_events(
-    limit: int = Query(50, ge=1, le=200),
-    current_user: User = Depends(get_current_admin),
+@router.get("/bots/{bot_id}")
+async def admin_get_bot(
+    bot_id: str,
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Lista eventos do sistema."""
-    from backend.models.system_event import SystemEvent
+    """Obtem detalhes de um bot (admin)."""
+    result = await db.execute(select(Bot).where(Bot.id == bot_id))
+    bot = result.scalar_one_or_none()
 
-    result = await db.execute(
-        select(SystemEvent)
-        .order_by(SystemEvent.created_at.desc())
-        .limit(limit)
-    )
-    events = result.scalars().all()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
 
     return {
-        "events": [
-            {
-                "id": str(e.id),
-                "event_type": e.event_type,
-                "severity": e.severity,
-                "message": e.message,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
-            for e in events
-        ],
+        "id": bot.id,
+        "name": bot.name,
+        "owner_id": bot.owner_id,
+        "license_id": bot.license_id,
+        "prompt": bot.prompt,
+        "personality": bot.personality,
+        "tone": bot.tone,
+        "language": bot.language,
+        "is_active": bot.is_active,
+        "is_connected": bot.is_connected,
+        "preferred_llm": bot.preferred_llm,
+        "temperature": bot.temperature,
+        "max_tokens": bot.max_tokens,
+        "version": bot.version,
+        "created_at": bot.created_at.isoformat() if bot.created_at else None,
+        "updated_at": bot.updated_at.isoformat() if bot.updated_at else None,
     }
 
 
-@router.post("/system/broadcast")
-async def admin_broadcast(
-    request: BroadcastRequest,
-    current_user: User = Depends(get_current_admin),
+@router.patch("/bots/{bot_id}")
+async def admin_update_bot(
+    bot_id: str,
+    data: AdminUserUpdateRequest,
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Envia notificação em massa."""
-    from backend.models.notification import Notification
+    """Atualiza um bot (admin)."""
+    result = await db.execute(select(Bot).where(Bot.id == bot_id))
+    bot = result.scalar_one_or_none()
 
-    # Buscar usuários alvo
-    query = select(User.id).where(User.is_active == True)
-    if request.target == "premium":
-        # Usuários com licenças premium
-        query = query.join(License, User.id == License.user_id).where(
-            License.status == "active"
-        )
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if hasattr(bot, field):
+            setattr(bot, field, value)
+
+    await db.commit()
+    await db.refresh(bot)
+
+    return {"id": bot.id, "name": bot.name, "is_active": bot.is_active}
+
+
+@router.delete("/bots/{bot_id}")
+async def admin_delete_bot(
+    bot_id: str,
+    current_user=Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Deleta um bot (admin)."""
+    result = await db.execute(select(Bot).where(Bot.id == bot_id))
+    bot = result.scalar_one_or_none()
+
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    await db.delete(bot)
+    await db.commit()
+
+    return {"message": "Bot deleted successfully"}
+
+
+# ── License Management ─────────────────────────────────────────────────────
+
+@router.get("/licenses")
+async def admin_list_licenses(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = None,
+    current_user=Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista todas as licencas (admin)."""
+    query = select(License)
+
+    if status:
+        query = query.where(License.status == status)
+
+    query = query.order_by(License.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
-    user_ids = [str(u[0]) for u in result.all()]
-
-    # Criar notificações
-    for uid in user_ids:
-        notif = Notification(
-            user_id=uid,
-            title="Aviso da Administração",
-            body=request.message,
-            type="broadcast",
-            is_read=False,
-        )
-        db.add(notif)
-
-    await db.commit()
-
-    return {"message": f"Notificação enviada para {len(user_ids)} usuários"}
-
-
-# ─── Analytics ────────────────────────────────────────────
-
-@router.get("/analytics/overview")
-async def admin_analytics_overview(
-    current_user: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """Analytics global da plataforma."""
-    from datetime import datetime, timedelta
-
-    # Mensagens por dia (últimos 7 dias)
-    days = []
-    for i in range(7):
-        day = datetime.utcnow() - timedelta(days=i)
-        day_start = day.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
-
-        count = (await db.execute(
-            select(func.count())
-            .where(Message.created_at >= day_start)
-            .where(Message.created_at < day_end)
-        )).scalar() or 0
-
-        days.append({
-            "date": day_start.strftime("%Y-%m-%d"),
-            "messages": count,
-        })
+    licenses = result.scalars().all()
 
     return {
-        "messages_by_day": list(reversed(days)),
-        "total_users": (await db.execute(select(func.count()).select_from(User))).scalar() or 0,
-        "total_bots": (await db.execute(select(func.count()).select_from(Bot))).scalar() or 0,
-        "total_messages": (await db.execute(select(func.count()).select_from(Message))).scalar() or 0,
-    }
-
-
-# ─── Suporte ──────────────────────────────────────────────
-
-@router.get("/support/tickets")
-async def admin_list_tickets(
-    status: Optional[str] = None,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """Lista tickets de suporte."""
-    from backend.models.support_ticket import SupportTicket
-
-    query = select(SupportTicket)
-    if status:
-        query = query.where(SupportTicket.status == status)
-
-    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total = count_result.scalar() or 0
-
-    offset = (page - 1) * per_page
-    result = await db.execute(
-        query.order_by(SupportTicket.created_at.desc()).offset(offset).limit(per_page)
-    )
-    tickets = result.scalars().all()
-
-    return {
-        "tickets": [
+        "licenses": [
             {
-                "id": str(t.id),
-                "subject": t.subject,
-                "status": t.status,
-                "priority": t.priority,
-                "user_id": str(t.user_id),
-                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "id": lic.id,
+                "license_key": lic.license_key,
+                "user_id": lic.user_id,
+                "plan_id": lic.plan_id,
+                "status": lic.status,
+                "is_active": lic.is_active,
+                "expires_at": lic.expires_at.isoformat() if lic.expires_at else None,
+                "created_at": lic.created_at.isoformat() if lic.created_at else None,
             }
-            for t in tickets
+            for lic in licenses
         ],
-        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 
-@router.put("/support/tickets/{ticket_id}")
-async def admin_update_ticket(
-    ticket_id: str,
-    status: Optional[str] = None,
-    assigned_to: Optional[str] = None,
-    resolution: Optional[str] = None,
-    current_user: User = Depends(get_current_admin),
+@router.get("/licenses/{license_id}")
+async def admin_get_license(
+    license_id: str,
+    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Atualiza ticket de suporte."""
-    from backend.models.support_ticket import SupportTicket
+    """Obtem detalhes de uma licenca (admin)."""
+    result = await db.execute(select(License).where(License.id == license_id))
+    lic = result.scalar_one_or_none()
 
-    result = await db.execute(select(SupportTicket).where(SupportTicket.id == ticket_id))
-    ticket = result.scalar_one_or_none()
-    if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket não encontrado")
+    if not lic:
+        raise HTTPException(status_code=404, detail="License not found")
 
-    if status:
-        ticket.status = status
-    if assigned_to:
-        ticket.assigned_to = assigned_to
-    if resolution:
-        ticket.resolution = resolution
+    return {
+        "id": lic.id,
+        "license_key": lic.license_key,
+        "key_hash": lic.key_hash,
+        "user_id": lic.user_id,
+        "plan_id": lic.plan_id,
+        "status": lic.status,
+        "is_active": lic.is_active,
+        "starts_at": lic.starts_at.isoformat() if lic.starts_at else None,
+        "expires_at": lic.expires_at.isoformat() if lic.expires_at else None,
+        "max_devices": lic.max_devices,
+        "created_at": lic.created_at.isoformat() if lic.created_at else None,
+        "updated_at": lic.updated_at.isoformat() if lic.updated_at else None,
+    }
 
-    await db.commit()
-    return {"message": "Ticket atualizado"}
+
+# ── Plan Management ────────────────────────────────────────────────────────
+
+@router.get("/plans")
+async def admin_list_plans(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user=Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista todos os planos (admin)."""
+    query = select(Plan).order_by(Plan.display_order.asc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+
+    result = await db.execute(query)
+    plans = result.scalars().all()
+
+    return {
+        "plans": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "slug": p.slug,
+                "price_monthly": p.price_monthly,
+                "price_yearly": p.price_yearly,
+                "is_active": p.is_active,
+                "is_public": p.is_public,
+                "display_order": p.display_order,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in plans
+        ],
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+# ── WhatsApp Sessions ──────────────────────────────────────────────────────
+
+@router.get("/whatsapp/sessions")
+async def admin_list_whatsapp_sessions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user=Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Lista todas as sessoes WhatsApp (admin)."""
+    query = select(WhatsAppSession).order_by(WhatsAppSession.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+
+    result = await db.execute(query)
+    sessions = result.scalars().all()
+
+    return {
+        "sessions": [
+            {
+                "id": s.id,
+                "owner_id": s.owner_id,
+                "phone_number": s.phone_number,
+                "status": s.status,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in sessions
+        ],
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+# ── System Stats ───────────────────────────────────────────────────────────
+
+@router.get("/stats")
+async def admin_system_stats(
+    current_user=Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Estatisticas gerais do sistema."""
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Messages stats
+    total_messages_result = await db.execute(select(func.count(Message.id)))
+    total_messages = total_messages_result.scalar() or 0
+
+    today_messages_result = await db.execute(
+        select(func.count(Message.id)).where(Message.created_at >= today_start)
+    )
+    today_messages = today_messages_result.scalar() or 0
+
+    # LLM stats
+    llm_total_result = await db.execute(select(func.sum(LLMUsage.total_tokens)))
+    llm_total_tokens = llm_total_result.scalar() or 0
+
+    llm_cost_result = await db.execute(select(func.sum(LLMUsage.cost)))
+    llm_total_cost = float(llm_cost_result.scalar() or 0)
+
+    # Connected WhatsApp sessions
+    connected_ws_result = await db.execute(
+        select(func.count(WhatsAppSession.id)).where(
+            WhatsAppSession.status == "connected"
+        )
+    )
+    connected_sessions = connected_ws_result.scalar() or 0
+
+    return {
+        "messages": {
+            "total": total_messages,
+            "today": today_messages,
+        },
+        "llm": {
+            "total_tokens": llm_total_tokens,
+            "total_cost": llm_total_cost,
+        },
+        "whatsapp": {
+            "connected_sessions": connected_sessions,
+        },
+    }

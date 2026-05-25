@@ -3,7 +3,7 @@ Flora Platform — Memory Model (Bot Memory per User)
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import String, DateTime, Text, ForeignKey, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.models.base import Base
 
@@ -26,6 +26,8 @@ class Memory(Base):
 
     __table_args__ = (
         # Unique constraint: um memory key por bot+user
+        UniqueConstraint("bot_id", "user_phone", "key", name="uq_bot_user_memory_key"),
+        Index("ix_memory_expires_at", "expires_at"),
         {"sqlite_autoincrement": True},
     )
 

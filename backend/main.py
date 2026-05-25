@@ -1,75 +1,70 @@
-"""Flora Platform — Backend Main (FastAPI)"""
-from contextlib import asynccontextmanager
+"""
+Flora Platform — FastAPI Backend Entry Point
+"""
+from __future__ import annotations
+
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
+from loguru import logger
 
 from backend.api.router import api_router
-from backend.api.middleware.audit import AuditMiddleware
-from backend.api.middleware.error_handler import ErrorHandlerMiddleware
-from backend.api.middleware.rate_limit import RateLimitMiddleware
 from backend.config import settings
-from backend.database import init_db
+from backend.database import check_db_connection, create_all_tables
+
+logging.basicConfig(level=logging.INFO)
+
+app = FastAPI(
+    title="Flora Platform API",
+    description="API da Plataforma Flora — Chatbots WhatsApp com IA",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register all API routes
+app.include_router(api_router)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup e shutdown da aplicação."""
-    # Startup
-    await init_db()
-    print(f"🌸 Flora Platform iniciada — {settings.HOST}:{settings.PORT}")
-    yield
-    # Shutdown
-    print("🌸 Flora Platform encerrada")
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database and services on startup."""
+    logger.info("🌸 Flora Platform starting up...")
+    try:
+        await create_all_tables()
+        logger.info("✅ Database tables created/verified")
+    except Exception as e:
+        logger.warning(f"⚠️ Database table creation issue: {e}")
+
+    db_ok = await check_db_connection()
+    if db_ok:
+        logger.info("✅ Database connection verified")
+    else:
+        logger.warning("⚠️ Database connection failed — check DATABASE_URL")
+
+    logger.info("🌸 Flora Platform ready!")
 
 
-def create_app() -> FastAPI:
-    """Factory function para criar a aplicação FastAPI."""
-    app = FastAPI(
-        title="Flora Platform",
-        description="Plataforma de Chatbots Licenciados com IA",
-        version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
-        lifespan=lifespan,
-    )
-
-    # ── CORS ───────────────────────────────────────────────
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # ── Session ────────────────────────────────────────────
-    app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
-
-    # ── Rate Limiting ──────────────────────────────────────
-    app.add_middleware(
-        RateLimitMiddleware,
-        max_requests=settings.RATE_LIMIT_REQUESTS,
-        window_seconds=settings.RATE_LIMIT_WINDOW,
-    )
-
-    # ── Audit ──────────────────────────────────────────────
-    app.add_middleware(AuditMiddleware)
-
-    # ── Error Handler ──────────────────────────────────────
-    app.add_middleware(ErrorHandlerMiddleware)
-
-    # ── API Routes ─────────────────────────────────────────
-    app.include_router(api_router, prefix="/api/v1")
-
-    # ── Root ───────────────────────────────────────────────
-    @app.get("/", include_in_schema=False)
-    async def root():
-        return {"message": "🌸 Flora Platform API", "docs": "/docs", "version": "1.0.0"}
-
-    return app
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("🌸 Flora Platform shutting down...")
 
 
-# Instância da aplicação
-app = create_app()
+@app.get("/", tags=["root"])
+async def root():
+    return {
+        "name": "Flora Platform",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/api/v1/health",
+    }

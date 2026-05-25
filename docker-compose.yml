@@ -1,113 +1,130 @@
-# =============================================
-# FLORA PLATFORM - Docker Compose
-# =============================================
+# 🌸 Flora Platform — Docker Compose
+# Uso: docker compose up -d
 
-version: '3.8'
+version: "3.9"
 
 services:
-  # Backend API (FastAPI)
+  # =============================================
+  # BACKEND — FastAPI REST API
+  # =============================================
   backend:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flora-backend
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://flora:${DB_PASSWORD:-flora_secret}@postgres:5432/flora_platform
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
+      - DEBUG=false
     env_file:
       - .env
-    volumes:
-      - ./backend:/app/backend
-      - ./alembic:/app/alembic
     depends_on:
-      - db
-      - redis
-    command: >
-      sh -c "python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./whatsapp_sessions:/app/whatsapp_sessions
+      - ./uploads:/app/uploads
     networks:
-      - flora-net
+      - flora-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # Database (PostgreSQL)
-  db:
-    image: postgres:15-alpine
+  # =============================================
+  # POSTGRESQL — Banco de Dados
+  # =============================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: flora-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: flora_platform
+      POSTGRES_USER: flora
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-flora_secret}
     ports:
       - "5432:5432"
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: flora_platform
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
     networks:
-      - flora-net
+      - flora-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flora -d flora_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Redis
+  # =============================================
+  # REDIS — Cache e Sessões
+  # =============================================
   redis:
     image: redis:7-alpine
+    container_name: flora-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-flora_redis}
     ports:
       - "6379:6379"
-    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
     networks:
-      - flora-net
+      - flora-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-flora_redis}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # WhatsApp Connector (Node.js)
-  whatsapp-connector:
-    build: ./whatsapp-connector
+  # =============================================
+  # PROMETHEUS — Métricas (opcional)
+  # =============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: flora-prometheus
+    restart: unless-stopped
     ports:
-      - "3001:3001"
-    env_file:
-      - .env
+      - "9090:9090"
     volumes:
-      - ./whatsapp-connector:/app
-      - /usr/src/app/node_modules
-    depends_on:
-      - redis
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     networks:
-      - flora-net
+      - flora-network
+    profiles:
+      - monitoring
 
-  # Celery Worker (for background tasks)
-  worker:
-    build: .
-    env_file:
-      - .env
-    volumes:
-      - ./backend:/app/backend
-    depends_on:
-      - backend
-      - db
-      - redis
-    command: celery -A backend.core.celery_app worker --loglevel=info
-    networks:
-      - flora-net
-
-  # Celery Beat (for periodic tasks)
-  beat:
-    build: .
-    env_file:
-      - .env
-    volumes:
-      - ./backend:/app/backend
-    depends_on:
-      - backend
-      - db
-      - redis
-    command: celery -A backend.core.celery_app beat --loglevel=info
-    networks:
-      - flora-net
-
-  # Flower (Celery monitoring)
-  flower:
-    build: .
-    env_file:
-      - .env
+  # =============================================
+  # GRAFANA — Dashboards (opcional)
+  # =============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: flora-grafana
+    restart: unless-stopped
     ports:
-      - "5555:5555"
-    depends_on:
-      - backend
-      - redis
-    command: celery -A backend.core.celery_app flower
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
     networks:
-      - flora-net
-
-networks:
-  flora-net:
-    driver: bridge
+      - flora-network
+    profiles:
+      - monitoring
 
 volumes:
   postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  flora-network:
+    driver: bridge

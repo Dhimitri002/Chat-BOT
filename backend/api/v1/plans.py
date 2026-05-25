@@ -52,15 +52,14 @@ async def list_plans(
     query = select(Plan).where(Plan.is_active == True)
     if not include_private:
         query = query.where(Plan.is_public == True)
-    query = query.order_by(Plan.sort_order, Plan.price_monthly)
-
+    query = query.order_by(Plan.sort_order.asc(), Plan.price_monthly.asc())
     result = await db.execute(query)
     plans = result.scalars().all()
 
     return {
         "plans": [
             {
-                "id": p.id,
+                "id": str(p.id),
                 "name": p.name,
                 "slug": p.slug,
                 "description": p.description,
@@ -70,12 +69,13 @@ async def list_plans(
                 "max_bots": p.max_bots,
                 "max_messages_per_day": p.max_messages_per_day,
                 "max_contacts": p.max_contacts,
-                "features": p.features or {},
+                "features": p.features,
                 "is_public": p.is_public,
                 "sort_order": p.sort_order,
             }
             for p in plans
-        ]
+        ],
+        "total": len(plans),
     }
 
 
@@ -85,15 +85,13 @@ async def get_plan(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Obtém detalhes de um plano."""
+    """Get a specific plan by ID."""
     result = await db.execute(select(Plan).where(Plan.id == plan_id))
     plan = result.scalar_one_or_none()
-
     if not plan:
         raise HTTPException(status_code=404, detail="Plano não encontrado")
-
     return {
-        "id": plan.id,
+        "id": str(plan.id),
         "name": plan.name,
         "slug": plan.slug,
         "description": plan.description,
@@ -103,96 +101,72 @@ async def get_plan(
         "max_bots": plan.max_bots,
         "max_messages_per_day": plan.max_messages_per_day,
         "max_contacts": plan.max_contacts,
-        "features": plan.features or {},
-        "is_active": plan.is_active,
+        "features": plan.features,
         "is_public": plan.is_public,
+        "sort_order": plan.sort_order,
     }
 
 
-@router.post("/")
+@router.post("/", dependencies=[Depends(get_current_admin)])
 async def create_plan(
-    request: PlanCreateRequest,
-    current_user=Depends(get_current_admin),
+    body: PlanCreateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Cria um novo plano (admin only)."""
-    plan = Plan(**request.dict())
+    """Create a new plan (admin only)."""
+    import uuid
+    plan = Plan(
+        id=str(uuid.uuid4()),
+        name=body.name,
+        slug=body.slug,
+        description=body.description,
+        price_monthly=body.price_monthly,
+        price_yearly=body.price_yearly,
+        currency=body.currency,
+        max_bots=body.max_bots,
+        max_messages_per_day=body.max_messages_per_day,
+        max_contacts=body.max_contacts,
+        features=body.features,
+        is_active=body.is_active,
+        is_public=body.is_public,
+        sort_order=body.sort_order,
+    )
     db.add(plan)
-    await db.flush()
-    return {"success": True, "id": plan.id, "message": "Plano criado com sucesso."}
+    await db.commit()
+    return {"id": str(plan.id), "name": plan.name}
 
 
-@router.put("/{plan_id}")
+@router.put("/{plan_id}", dependencies=[Depends(get_current_admin)])
 async def update_plan(
     plan_id: str,
-    request: PlanUpdateRequest,
-    current_user=Depends(get_current_admin),
+    body: PlanUpdateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Atualiza um plano (admin only)."""
+    """Update a plan (admin only)."""
     result = await db.execute(select(Plan).where(Plan.id == plan_id))
     plan = result.scalar_one_or_none()
-
     if not plan:
         raise HTTPException(status_code=404, detail="Plano não encontrado")
 
-    update_data = request.dict(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(plan, key, value)
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if hasattr(plan, field) and value is not None:
+            setattr(plan, field, value)
 
-    await db.flush()
-    return {"success": True, "message": "Plano atualizado."}
+    await db.commit()
+    return {"success": True, "message": "Plano atualizado"}
 
 
-@router.delete("/{plan_id}")
+@router.delete("/{plan_id}", dependencies=[Depends(get_current_admin)])
 async def delete_plan(
     plan_id: str,
-    current_user=Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Deleta um plano (admin only)."""
+    """Delete a plan (admin only)."""
     result = await db.execute(select(Plan).where(Plan.id == plan_id))
     plan = result.scalar_one_or_none()
-
     if not plan:
         raise HTTPException(status_code=404, detail="Plano não encontrado")
 
-    plan.is_active = False
-    await db.flush()
-    return {"success": True, "message": "Plano desativado."}
-
-
-@router.get("/{plan_id}/features")
-async def get_plan_features(
-    plan_id: str,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Obtém features de um plano."""
-    result = await db.execute(select(Plan).where(Plan.id == plan_id))
-    plan = result.scalar_one_or_none()
-
-    if not plan:
-        raise HTTPException(status_code=404, detail="Plano não encontrado")
-
-    return {"features": plan.features or {}}
-
-
-@router.post("/{plan_id}/subscribe")
-async def subscribe_to_plan(
-    plan_id: str,
-    current_user=Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Inscreve o usuário atual em um plano."""
-    result = await db.execute(select(Plan).where(Plan.id == plan_id))
-    plan = result.scalar_one_or_none()
-
-    if not plan or not plan.is_active:
-        raise HTTPException(status_code=404, detail="Plano não encontrado ou inativo")
-
-    return {
-        "success": True,
-        "message": f"Inscrição no plano {plan.name} realizada.",
-        "plan": {"id": plan.id, "name": plan.name, "price": plan.price_monthly},
-    }
+    await db.delete(plan)
+    await db.commit()
+    return {"success": True, "message": "Plano removido"}

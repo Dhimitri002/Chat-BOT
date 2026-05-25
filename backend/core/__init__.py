@@ -1,6 +1,26 @@
-from backend.core.security import (
-    hash_password, verify_password,
-    create_access_token, create_refresh_token, decode_token,
-    encryption, generate_license_key, hash_license_key,
-    generate_hmac, verify_hmac, get_device_fingerprint,
-)
+"""
+Flora Platform — Core Package
+==============================
+Core business logic: security, LLM routing, chat engine,
+Flora AI, commands, licensing, WhatsApp management.
+"""
+
+from backend.core.security import SecurityManager
+from backend.core.llm_router import LLMRouter, LLMProvider, LLMResponse
+from backend.core.chat_engine import ChatEngine
+from backend.core.command_engine import CommandEngine
+from backend.core.flora_engine import FloraEngine
+from backend.core.license_manager import CoreLicenseManager
+from backend.core.whatsapp_manager import WhatsAppSessionManager
+
+__all__ = [
+    "SecurityManager",
+    "LLMRouter",
+    "LLMProvider",
+    "LLMResponse",
+    "ChatEngine",
+    "CommandEngine",
+    "FloraEngine",
+    "CoreLicenseManager",
+    "WhatsAppSessionManager",
+]

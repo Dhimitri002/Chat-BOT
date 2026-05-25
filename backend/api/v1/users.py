@@ -1,178 +1,68 @@
-"""Users Endpoints — API para gerenciamento de usuários."""
-from typing import Optional
+"""Flora Platform — User Management Endpoints"""
+from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+import logging
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_current_user, get_current_admin, get_db
-from backend.models.bot import Bot
-from backend.models.message import Message
+from backend.api.deps import get_current_user, get_db
+from backend.core.security import get_password_hash
 from backend.models.user import User
-from backend.services.auth_service import hash_password, verify_password
+from backend.schemas.user import UserResponse, UserUpdate, ChangePassword
 
-router = APIRouter()
-
-
-class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    avatar_url: Optional[str] = None
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/users", tags=["users"])
 
 
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str = Field(..., min_length=6)
+@router.get("/profile", response_model=UserResponse)
+async def get_profile(current_user: User = Depends(get_current_user)):
+    """Get the current user's profile."""
+    return current_user
 
 
-# ─── Perfil do usuário ────────────────────────────────────
-
-@router.get("/me", response_model=dict)
-async def get_me(current_user: User = Depends(get_current_user)):
-    """Obtém perfil do usuário atual."""
-    return {
-        "id": str(current_user.id),
-        "email": current_user.email,
-        "full_name": current_user.full_name,
-        "role": current_user.role,
-        "is_active": current_user.is_active,
-        "is_verified": current_user.is_verified,
-        "avatar_url": current_user.avatar_url,
-        "last_login": current_user.last_login.isoformat() if current_user.last_login else None,
-        "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
-    }
-
-
-@router.put("/me", response_model=dict)
-async def update_me(
-    data: UserUpdate,
+@router.put("/profile", response_model=UserResponse)
+async def update_profile(
+    body: UserUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Atualiza perfil do usuário."""
-    update_data = data.dict(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(current_user, field, value)
+    """Update the current user's profile."""
+    update_data = body.model_dump(exclude_unset=True)
+
+    if "name" in update_data and update_data["name"]:
+        current_user.name = update_data["name"]
+    if "email" in update_data and update_data["email"]:
+        existing = await db.execute(
+            select(User).where(User.email == update_data["email"], User.id != current_user.id)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email já está em uso")
+        current_user.email = update_data["email"]
+    if "avatar_url" in update_data:
+        current_user.avatar_url = update_data["avatar_url"]
+    if "password" in update_data and update_data["password"]:
+        current_user.hashed_password = get_password_hash(update_data["password"])
 
     await db.commit()
     await db.refresh(current_user)
-
-    return {
-        "id": str(current_user.id),
-        "full_name": current_user.full_name,
-        "avatar_url": current_user.avatar_url,
-        "message": "Perfil atualizado",
-    }
+    return current_user
 
 
-@router.put("/me/password", response_model=dict)
+@router.post("/change-password")
 async def change_password(
-    request: ChangePasswordRequest,
+    body: ChangePassword,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Altera senha do usuário."""
-    if not verify_password(request.current_password, current_user.hashed_password):
+    """Change the current user's password."""
+    from backend.core.security import verify_password, get_password_hash
+
+    if not verify_password(body.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Senha atual incorreta")
 
-    current_user.hashed_password = hash_password(request.new_password)
+    current_user.hashed_password = get_password_hash(body.new_password)
     await db.commit()
-
-    return {"message": "Senha alterada com sucesso" }
-
-
-@router.delete("/me", response_model=dict)
-async def delete_account(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Deleta conta do usuário."""
-    await db.delete(current_user)
-    await db.commit()
-    return {"message": "Conta deletada com sucesso"}
-
-
-@router.get("/me/usage", response_model=dict)
-async def get_usage(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Obtém estatísticas de uso do usuário."""
-    # Contar bots
-    bots_result = await db.execute(
-        select(func.count()).where(Bot.user_id == current_user.id)
-    )
-    bots_count = bots_result.scalar() or 0
-
-    # Contar mensagens
-    messages_result = await db.execute(
-        select(func.count())
-        .select_from(Message)
-        .join(Bot, Message.bot_id == Bot.id)
-        .where(Bot.user_id == current_user.id)
-    )
-    messages_count = messages_result.scalar() or 0
-
-    # Contar mensagens hoje
-    from datetime import datetime, timedelta
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_result = await db.execute(
-        select(func.count())
-        .select_from(Message)
-        .join(Bot, Message.bot_id == Bot.id)
-        .where(Bot.user_id == current_user.id)
-        .where(Message.created_at >= today)
-    )
-    messages_today = today_result.scalar() or 0
-
-    return {
-        "bots_used": bots_count,
-        "messages_total": messages_count,
-        "messages_today": messages_today,
-    }
-
-
-# ─── Admin endpoints ──────────────────────────────────────
-
-@router.get("/admin/users", response_model=dict, dependencies=[Depends(get_current_admin)])
-async def admin_list_users(
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
-    search: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-):
-    """Lista todos os usuários (admin only)."""
-    query = select(User)
-
-    if search:
-        query = query.where(
-            User.email.contains(search) | User.full_name.contains(search)
-        )
-
-    # Count
-    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
-    total = count_result.scalar() or 0
-
-    # Page
-    offset = (page - 1) * per_page
-    result = await db.execute(
-        query.order_by(User.created_at.desc()).offset(offset).limit(per_page)
-    )
-    users = result.scalars().all()
-
-    return {
-        "users": [
-            {
-                "id": str(u.id),
-                "email": u.email,
-                "full_name": u.full_name,
-                "role": u.role,
-                "is_active": u.is_active,
-                "created_at": u.created_at.isoformat() if u.created_at else None,
-            }
-            for u in users
-        ],
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-    }
+    return {"success": True, "message": "Senha alterada com sucesso"}

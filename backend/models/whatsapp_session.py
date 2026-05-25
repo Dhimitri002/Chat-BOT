@@ -3,7 +3,7 @@ Flora Platform — WhatsApp Session Model
 """
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, JSON, Text
+from sqlalchemy import String, DateTime, ForeignKey, JSON, Text, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.models.base import Base
 
@@ -34,7 +34,7 @@ class WhatsAppSession(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     disconnected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     disconnect_reason: Mapped[str] = mapped_column(String(255), default="", nullable=False)
-    reconnect_attempts: Mapped[int] = mapped_column(String(36), default="0", nullable=False)
+    reconnect_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

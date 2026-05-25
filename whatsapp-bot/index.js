@@ -1,527 +1,379 @@
 /**
- * WhatsApp Bot Bridge - Flora Platform
+ * WhatsApp Bot — Flora Platform (Standalone Bot Mode)
+ * ======================================================
+ * Standalone WhatsApp bot using Baileys that processes incoming messages
+ * and routes them through the Flora AI engine via HTTP API.
  *
- * Gerencia conexões WhatsApp usando whatsapp-web.js
- * Comunica com o backend FastAPI via WebSocket/stdio
+ * This is an alternative to the Node.js + Python bridge architecture,
+ * useful for simple deployments where the bot runs independently.
  *
- * Uso: node index.js
- * Variáveis de ambiente:
- *   BOT_ID - ID do bot
- *   SESSION_ID - ID da sessão
- *   SESSION_DIR - Diretório de sessão
- *   WS_PORT - Porta do WebSocket
- *   BACKEND_URL - URL do backend
+ * Mode 1: Bridge mode
+ *   Connects to the Python Bridge via TCP/HTTP
+ *
+ * Mode 2: Standalone mode
+ *   Calls the Flora backend REST API directly
+ *
+ * Environment variables:
+ *   BOT_ID            — Bot identifier
+ *   SESSION_ID        — Session identifier
+ *   AUTH_DIR          — Baileys auth directory
+ *   BACKEND_URL       — Flora API backend URL (for standalone mode)
+ *   BRIDGE_HOST       — Python bridge host (for bridge mode)
+ *   BRIDGE_PORT       — Python bridge port (for bridge mode)
+ *   MODE              — "standalone" or "bridge"
+ *   FLORA_API_KEY     — API key for Flora backend
  */
 
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const fs = require('fs');
-const path = require('path');
+const {
+  makeWASocket,
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+} = require("@whiskeysockets/baileys");
+const { Boom } = require("@hapi/boom");
+const pino = require("pino");
+const fs = require("fs");
+const path = require("path");
+const http = require("http");
 
-// Configuração
-const BOT_ID = process.env.BOT_ID || 'default';
-const SESSION_ID = process.env.SESSION_ID || 'default';
-const SESSION_DIR = process.env.SESSION_DIR || `./sessions/${BOT_ID}`;
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
+// ─── Configuration ───────────────────────────────────────────────────
 
-// Estado
-let client = null;
+const BOT_ID = process.env.BOT_ID || "default";
+const SESSION_ID = process.env.SESSION_ID || "default";
+const AUTH_DIR = process.env.AUTH_DIR || "./.wa_auth";
+const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+const FLORA_API_KEY = process.env.FLORA_API_KEY || "";
+const MODE = process.env.MODE || "standalone"; // "standalone" or "bridge"
+const BRIDGE_HOST = process.env.BRIDGE_HOST || "127.0.0.1";
+const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || "3333", 10);
+const LOG_LEVEL = process.env.LOG_LEVEL || "info";
+
+const SESSION_PATH = path.join(AUTH_DIR, `bot_${BOT_ID}_${SESSION_ID}`);
+
+// ─── Logging ──────────────────────────────────────────────────────────
+
+const logger = pino({ level: LOG_LEVEL });
+
+function log(level, msg, data = {}) {
+  const entry = { level, bot_id: BOT_ID, session_id: SESSION_ID, msg, ...data };
+  if (level === "error") logger.error(entry);
+  else if (level === "warn") logger.warn(entry);
+  else logger.info(entry);
+}
+
+// ─── State ────────────────────────────────────────────────────────────
+
+let sock = null;
 let isConnected = false;
-let qrCode = null;
+let isConnecting = false;
 let reconnectCount = 0;
+let qrCode = null;
 const MAX_RECONNECT = 10;
 
-// Utilitários
-function log(level, message, data = {}) {
-    const entry = {
-        timestamp: new Date().toISOString(),
-        level,
-        bot_id: BOT_ID,
-        session_id: SESSION_ID,
-        message,
-        ...data
+// ─── HTTP Client for Backend API ──────────────────────────────────────
+
+function callFloraAPI(endpoint, data = {}) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(data);
+    const url = new URL(`${BACKEND_URL}/api/v1/flora${endpoint}`);
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === "https:" ? 443 : 80),
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+        ...(FLORA_API_KEY ? { "Authorization": `Bearer ${FLORA_API_KEY}` } : {}),
+      },
     };
-    console.log(JSON.stringify(entry));
-}
 
-function sendEvent(type, data = {}) {
-    const event = { type, bot_id: BOT_ID, session_id: SESSION_ID, ...data };
-    console.log(JSON.stringify(event));
-}
-
-// Garantir diretório de sessão
-if (!fs.existsSync(SESSION_DIR)) {
-    fs.mkdirSync(SESSION_DIR, { recursive: true });
-}
-
-// Criar cliente WhatsApp
-function createClient() {
-    log('info', 'Criando cliente WhatsApp...');
-
-    client = new Client({
-        authStrategy: new LocalAuth({
-            clientId: `${BOT_ID}_${SESSION_ID}`,
-            dataPath: SESSION_DIR
-        }),
-        puppeteer: {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
-                '--disable-gpu'
-            ]
-        },
-        qrMaxRetries: 5,
-        takeoverOnConflict: true,
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    });
-
-    // Evento: QR Code gerado
-    client.on('qr', (qr) => {
-        log('info', 'QR Code gerado');
-        qrCode = qr;
-        sendEvent('qr', {
-            qr: qr,
-            expires_in: 60
-        });
-    });
-
-    // Evento: Autenticando
-    client.on('authenticating', () => {
-        log('info', 'Autenticando...');
-        sendEvent('authenticating');
-    });
-
-    // Evento: Conectado
-    client.on('ready', () => {
-        isConnected = true;
-        reconnectCount = 0;
-        const info = client.info;
-        log('info', 'WhatsApp conectado!', { phone: info.wid.user, name: info.pushname });
-        sendEvent('connected', {
-            phone: info.wid.user,
-            name: info.pushname,
-            platform: info.platform
-        });
-    });
-
-    // Evento: Desconectado
-    client.on('disconnected', (reason) => {
-        isConnected = false;
-        log('warn', 'WhatsApp desconectado', { reason });
-        sendEvent('disconnected', { reason: String(reason) });
-
-        // Tentar reconexão se não foi logout intencional
-        if (reason !== 'intentional' && reason !== 'LOGOUT') {
-            attemptReconnect();
-        }
-    });
-
-    // Evento: Mudança de estado
-    client.on('change_state', (state) => {
-        log('info', 'Mudança de estado', { state });
-        sendEvent('state_change', { state });
-    });
-
-    // Evento: Mudança na bateria
-    client.on('change_battery', (batteryInfo) => {
-        sendEvent('battery', {
-            level: batteryInfo.battery,
-            is_charging: batteryInfo.plugged
-        });
-    });
-
-    // Evento: Mensagem recebida
-    client.on('message', async (msg) => {
+    const req = http.request(options, (res) => {
+      let chunks = "";
+      res.on("data", (d) => { chunks += d; });
+      res.on("end", () => {
         try {
-            // Ignorar mensagens de status/grupos (configurável)
-            if (msg.from === 'status@broadcast') return;
-
-            const messageData = {
-                id: msg.id._serialized,
-                from: msg.from,
-                to: msg.to,
-                body: msg.body || '',
-                type: msg.type,
-                timestamp: msg.timestamp,
-                has_media: msg.hasMedia,
-                is_group: msg.from.endsWith('@g.us'),
-                is_forwarded: msg.isForwarded,
-                author: msg.author || null,
-                // Dados adicionais
-                notify_name: msg._data?.notifyName || null,
-                caption: msg._data?.caption || null,
-            };
-
-            // Se tem mídia, baixar e incluir dados
-            if (msg.hasMedia) {
-                try {
-                    const media = await msg.downloadMedia();
-                    messageData.media = {
-                        mimetype: media.mimetype,
-                        filename: media.filename || null,
-                        data: media.data, // base64
-                        filesize: media.filesize || null
-                    };
-                } catch (mediaErr) {
-                    log('warn', 'Erro ao baixar mídia', { error: mediaErr.message });
-                }
-            }
-
-            sendEvent('message', { message: messageData });
-        } catch (err) {
-            log('error', 'Erro ao processar mensagem', { error: err.message });
+          resolve(JSON.parse(chunks));
+        } catch {
+          resolve({ raw: chunks });
         }
+      });
     });
 
-    // Evento: Mensagem criada (enviada)
-    client.on('message_create', async (msg) => {
-        // Só notificar mensagens enviadas pelo próprio bot
-        if (msg.fromMe) {
-            sendEvent('message_sent', {
-                id: msg.id._serialized,
-                to: msg.to,
-                body: msg.body || '',
-                type: msg.type,
-                timestamp: msg.timestamp
-            });
-        }
-    });
-
-    // Evento: Entrou em grupo
-    client.on('group_join', (notification) => {
-        sendEvent('group_join', {
-            group_id: notification.chatId,
-            group_name: notification.chatName,
-            timestamp: Date.now()
-        });
-    });
-
-    // Evento: Saiu de grupo
-    client.on('group_leave', (notification) => {
-        sendEvent('group_leave', {
-            group_id: notification.chatId,
-            group_name: notification.chatName,
-            timestamp: Date.now()
-        });
-    });
-
-    return client;
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
 }
 
-// Reconexão automática
-function attemptReconnect() {
-    if (reconnectCount >= MAX_RECONNECT) {
-        log('error', 'Máximo de reconexões atingido');
-        sendEvent('error', { error: 'Máximo de reconexões atingido' });
-        return;
+// ─── Auth State ───────────────────────────────────────────────────────
+
+async function loadAuthState() {
+  await fs.promises.mkdir(SESSION_PATH, { recursive: true });
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION_PATH);
+  return { state, saveCreds };
+}
+
+// ─── Process Incoming Message with Flora AI ───────────────────────────
+
+async function processMessage(data) {
+  const { sender, sender_name, content, is_group, message_id } = data;
+
+  // Skip groups unless they explicitly mention the bot
+  // (configurable behavior)
+  if (is_group) {
+    log("debug", "Skipping group message", { sender: sender_name });
+    return;
+  }
+
+  log("info", "Processing message", { from: sender_name, content: content.substring(0, 80) });
+
+  try {
+    const result = await callFloraAPI("/chat", {
+      session_id: `${BOT_ID}_${sender}`,
+      user_id: sender,
+      user_name: sender_name,
+      message: content,
+      bot_id: BOT_ID,
+    });
+
+    const reply = result.reply || result.response || result.text || "Desculpa, não entendi. Pode repetir?";
+
+    if (reply) {
+      await sendMessage(sender, reply);
+      log("info", "Reply sent", { to: sender_name });
     }
+  } catch (err) {
+    log("error", "Flora API call failed", { error: err.message });
+    // Fallback response
+    try {
+      await sendMessage(sender, "Opa! Estou com uma instabilidade técnica. Tente novamente em alguns instantes 😅");
+    } catch (sendErr) {
+      log("error", "Failed to send fallback message", { error: sendErr.message });
+    }
+  }
+}
 
-    reconnectCount++;
-    const delay = Math.min(2000 * Math.pow(2, reconnectCount - 1), 120000);
+// ─── Send Message ─────────────────────────────────────────────────────
 
-    log('info', `Reconectando em ${delay}ms (tentativa ${reconnectCount})`);
-    sendEvent('reconnecting', { attempt: reconnectCount, delay });
+async function sendMessage(to, message) {
+  if (!sock || !isConnected) {
+    throw new Error("Not connected to WhatsApp");
+  }
 
+  let formattedNumber = to.replace(/\D/g, "");
+  if (!formattedNumber.endsWith("@s.whatsapp.net")) {
+    formattedNumber += "@s.whatsapp.net";
+  }
+
+  await sock.sendMessage(formattedNumber, { text: message });
+}
+
+// ─── Connection ───────────────────────────────────────────────────────
+
+async function startConnection() {
+  if (isConnecting) {
+    log("warn", "Already connecting, skipping");
+    return;
+  }
+  isConnecting = true;
+
+  try {
+    log("info", "Starting WhatsApp Bot connection...", { mode: MODE });
+
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    log("info", `Baileys v${version.join(".")}, latest: ${isLatest}`);
+
+    const { state, saveCreds } = await loadAuthState();
+
+    sock = makeWASocket({
+      version,
+      logger: pino({ level: "silent" }),
+      printQRInTerminal: false,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+      },
+      markOnlineOnConnect: true,
+      syncFullHistory: false,
+      defaultQueryTimeoutMs: 30000,
+    });
+
+    // Save credentials
+    sock.ev.on("creds.update", saveCreds);
+
+    // Connection lifecycle
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        qrCode = qr;
+        log("info", "QR code generated — scan with WhatsApp");
+        // Print a simple representation
+        console.log("\n=== QR CODE ===");
+        console.log(qr.substring(0, 80) + "...");
+        console.log("===============\n");
+      }
+
+      if (connection === "close") {
+        isConnected = false;
+        isConnecting = false;
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        log("warn", "Connection closed", { statusCode, shouldReconnect });
+
+        if (shouldReconnect) {
+          reconnectCount++;
+          if (reconnectCount > MAX_RECONNECT) {
+            log("error", "Max reconnect attempts reached");
+            return;
+          }
+          const delay = Math.min(2000 * Math.pow(2, reconnectCount - 1), 60000);
+          log("info", `Reconnecting in ${delay}ms (attempt ${reconnectCount})`);
+          setTimeout(() => startConnection(), delay);
+        } else {
+          log("warn", "Logged out. Delete session files to reconnect.");
+        }
+      }
+
+      if (connection === "open") {
+        isConnected = true;
+        isConnecting = false;
+        reconnectCount = 0;
+        qrCode = null;
+
+        const phoneNumber = sock.user?.id?.split(":")[0];
+        const phoneName = sock.user?.name || "Bot";
+
+        log("info", "Bot connected!", { phoneNumber, phoneName });
+      }
+    });
+
+    // Incoming messages
+    sock.ev.on("messages.upsert", async (m) => {
+      if (m.type !== "notify" && m.type !== "append") return;
+
+      for (const msg of m.messages || []) {
+        if (!msg.message || msg.key.fromMe) continue;
+        if (msg.key.remoteJid === "status@broadcast") continue;
+
+        const sender = msg.key.remoteJid;
+        const senderNumber = sender.split("@")[0];
+        const messageType = Object.keys(msg.message)[0];
+
+        let content = "";
+
+        switch (messageType) {
+          case "conversation":
+            content = msg.message.conversation;
+            break;
+          case "extendedTextMessage":
+            content = msg.message.extendedTextMessage.text || "";
+            break;
+          case "imageMessage":
+            content = msg.message.imageMessage.caption || "";
+            break;
+          case "videoMessage":
+            content = msg.message.videoMessage.caption || "";
+            break;
+          case "audioMessage":
+            content = "[Áudio]";
+            break;
+          case "documentMessage":
+            content = `[Documento: ${msg.message.documentMessage.fileName || "arquivo"}]`;
+            break;
+          case "stickerMessage":
+            content = "[Sticker]";
+            break;
+          case "locationMessage":
+            content = "[Localização]";
+            break;
+          default:
+            return; // Skip unsupported types
+        }
+
+        if (content.trim()) {
+          await processMessage({
+            message_id: msg.key.id,
+            sender: senderNumber,
+            sender_name: msg.pushName || senderNumber,
+            content,
+            is_group: sender.endsWith("@g.us"),
+            timestamp: new Date(Number(msg.messageTimestamp) * 1000).toISOString(),
+          });
+        }
+      }
+    });
+
+  } catch (error) {
+    isConnecting = false;
+    log("error", "Fatal connection error", { error: error.message });
     setTimeout(() => {
-        if (client) {
-            client.destroy().catch(() => {});
-        }
-        client = createClient();
-        client.initialize().catch(err => {
-            log('error', 'Erro ao reinicializar', { error: err.message });
-        });
-    }, delay);
+      if (!isConnected) startConnection();
+    }, 5000);
+  }
 }
 
-// Processar comandos do backend (via stdin)
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', async (data) => {
-    try {
-        const lines = data.toString().trim().split('\n');
-        for (const line of lines) {
-            if (!line.trim()) continue;
-            const cmd = JSON.parse(line);
-            await handleCommand(cmd);
-        }
-    } catch (err) {
-        log('error', 'Erro ao processar comando', { error: err.message });
+// ─── Health Check HTTP Server ─────────────────────────────────────────
+
+function startHealthCheckServer() {
+  const PORT = parseInt(process.env.HEALTH_PORT || "3001", 10);
+
+  const server = http.createServer((req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: isConnected ? "connected" : "disconnected",
+        bot_id: BOT_ID,
+        mode: MODE,
+        phone: sock?.user?.id?.split(":")[0] || null,
+        timestamp: new Date().toISOString(),
+      }));
+    } else if (req.url === "/qr" && qrCode) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ qr: qrCode }));
+    } else {
+      res.writeHead(404);
+      res.end("Not found");
     }
+  });
+
+  server.listen(PORT, () => {
+    log("info", `Health check server listening on port ${PORT}`);
+  });
+
+  return server;
+}
+
+// ─── Graceful Shutdown ────────────────────────────────────────────────
+
+async function shutdown(signal) {
+  log("info", `Received ${signal}, shutting down...`);
+  if (sock) {
+    try { await sock.logout(); } catch (e) { /* ignore */ }
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("uncaughtException", (err) => {
+  log("error", "Uncaught exception", { error: err.message, stack: err.stack });
+});
+process.on("unhandledRejection", (reason) => {
+  log("error", "Unhandled rejection", { reason: String(reason) });
 });
 
-// Handler de comandos do backend
-async function handleCommand(cmd) {
-    const action = cmd.action || cmd.type;
+// ─── Start ────────────────────────────────────────────────────────────
 
-    switch (action) {
-        case 'send_message':
-            await cmdSendMessage(cmd);
-            break;
-
-        case 'send_media':
-            await cmdSendMedia(cmd);
-            break;
-
-        case 'get_contacts':
-            await cmdGetContacts();
-            break;
-
-        case 'get_groups':
-            await cmdGetGroups();
-            break;
-
-        case 'get_chats':
-            await cmdGetChats();
-            break;
-
-        case 'get_profile':
-            await cmdGetProfile(cmd);
-            break;
-
-        case 'set_status':
-            await cmdSetStatus(cmd);
-            break;
-
-        case 'refresh_qr':
-            // Forçar novo QR code
-            if (client) {
-                client.destroy().catch(() => {});
-                client = createClient();
-                client.initialize().catch(err => {
-                    log('error', 'Erro ao gerar novo QR', { error: err.message });
-                });
-            }
-            break;
-
-        case 'logout':
-            if (client) {
-                await client.logout();
-                sendEvent('disconnected', { reason: 'intentional' });
-            }
-            break;
-
-        case 'get_info':
-            sendEvent('info', {
-                connected: isConnected,
-                phone: client?.info?.wid?.user || null,
-                name: client?.info?.pushname || null,
-                platform: client?.info?.platform || null,
-                state: client?.info?.wid ? 'connected' : 'disconnected'
-            });
-            break;
-
-        default:
-            log('warn', 'Comando desconhecido', { action });
-    }
-}
-
-// Enviar mensagem de texto
-async function cmdSendMessage(cmd) {
-    if (!isConnected || !client) {
-        sendEvent('error', { error: 'Não conectado', message_id: cmd.message_id });
-        return;
-    }
-
-    try {
-        const to = cmd.to.includes('@c.us') ? cmd.to : `${cmd.to}@c.us`;
-        const sent = await client.sendMessage(to, cmd.text);
-
-        sendEvent('message_sent', {
-            message_id: cmd.message_id,
-            id: sent.id._serialized,
-            to: to,
-            timestamp: Date.now()
-        });
-    } catch (err) {
-        log('error', 'Erro ao enviar mensagem', { error: err.message });
-        sendEvent('error', { error: err.message, message_id: cmd.message_id });
-    }
-}
-
-// Enviar mídia
-async function cmdSendMedia(cmd) {
-    if (!isConnected || !client) {
-        sendEvent('error', { error: 'Não conectado', message_id: cmd.message_id });
-        return;
-    }
-
-    try {
-        let mediaPath = cmd.media_path;
-
-        // Se é base64, salvar temporariamente
-        if (cmd.media_data) {
-            const ext = cmd.media_mimetype ? cmd.media_mimetype.split('/')[1] : 'bin';
-            mediaPath = path.join(SESSION_DIR, `temp_${Date.now()}.${ext}`);
-            const buffer = Buffer.from(cmd.media_data, 'base64');
-            fs.writeFileSync(mediaPath, buffer);
-        }
-
-        const media = MessageMedia.fromFilePath(mediaPath);
-        const to = cmd.to.includes('@c.us') ? cmd.to : `${cmd.to}@c.us`;
-        const sent = await client.sendMessage(to, media, {
-            caption: cmd.caption || ''
-        });
-
-        // Limpar arquivo temporário
-        if (cmd.media_data && mediaPath && fs.existsSync(mediaPath)) {
-            fs.unlinkSync(mediaPath);
-        }
-
-        sendEvent('message_sent', {
-            message_id: cmd.message_id,
-            id: sent.id._serialized,
-            to: to,
-            timestamp: Date.now()
-        });
-    } catch (err) {
-        log('error', 'Erro ao enviar mídia', { error: err.message });
-        sendEvent('error', { error: err.message, message_id: cmd.message_id });
-    }
-}
-
-// Obter contatos
-async function cmdGetContacts() {
-    if (!isConnected || !client) {
-        sendEvent('error', { error: 'Não conectado' });
-        return;
-    }
-
-    try {
-        const contacts = await client.getContacts();
-        const result = contacts.map(c => ({
-            id: c.id._serialized,
-            name: c.name || c.pushname || '',
-            number: c.number || '',
-            is_business: c.isBusiness,
-            is_me: c.isMe
-        }));
-        sendEvent('contacts', { contacts: result });
-    } catch (err) {
-        log('error', 'Erro ao obter contatos', { error: err.message });
-    }
-}
-
-// Obter grupos
-async function cmdGetGroups() {
-    if (!isConnected || !client) {
-        sendEvent('error', { error: 'Não conectado' });
-        return;
-    }
-
-    try {
-        const chats = await client.getChats();
-        const groups = chats.filter(c => c.isGroup).map(g => ({
-            id: g.id._serialized,
-            name: g.name,
-            participants: g.participants?.length || 0,
-            is_archived: g.archived,
-            last_message: g.lastMessage?.body || null
-        }));
-        sendEvent('groups', { groups });
-    } catch (err) {
-        log('error', 'Erro ao obter grupos', { error: err.message });
-    }
-}
-
-// Obter chats
-async function cmdGetChats() {
-    if (!isConnected || !client) {
-        sendEvent('error', { error: 'Não conectado' });
-        return;
-    }
-
-    try {
-        const chats = await client.getChats();
-        const result = chats.slice(0, 50).map(c => ({
-            id: c.id._serialized,
-            name: c.name,
-            is_group: c.isGroup,
-            unread_count: c.unreadCount,
-            last_message: c.lastMessage?.body || null,
-            timestamp: c.timestamp
-        }));
-        sendEvent('chats', { chats: result });
-    } catch (err) {
-        log('error', 'Erro ao obter chats', { error: err.message });
-    }
-}
-
-// Obter perfil
-async function cmdGetProfile(cmd) {
-    if (!isConnected || !client) {
-        sendEvent('error', { error: 'Não conectado' });
-        return;
-    }
-
-    try {
-        const number = cmd.number.includes('@c.us') ? cmd.number : `${cmd.number}@c.us`;
-        const contact = await client.getContactById(number);
-        const profilePic = await contact.getProfilePicUrl();
-
-        sendEvent('profile', {
-            number: contact.number,
-            name: contact.name || contact.pushname || '',
-            profile_pic: profilePic || null,
-            is_business: contact.isBusiness,
-            status: contact.status || null
-        });
-    } catch (err) {
-        log('error', 'Erro ao obter perfil', { error: err.message });
-    }
-}
-
-// Definir status
-async function cmdSetStatus(cmd) {
-    if (!isConnected || !client) {
-        sendEvent('error', { error: 'Não conectado' });
-        return;
-    }
-
-    try {
-        await client.setStatus(cmd.status);
-        sendEvent('status_set', { status: cmd.status });
-    } catch (err) {
-        log('error', 'Erro ao definir status', { error: err.message });
-    }
-}
-
-// Tratamento de erros não capturados
-process.on('uncaughtException', (err) => {
-    log('error', 'Exceção não capturada', { error: err.message, stack: err.stack });
-    sendEvent('error', { error: err.message, fatal: true });
+log("info", "WhatsApp Bot starting...", {
+  bot_id: BOT_ID,
+  session_id: SESSION_ID,
+  mode: MODE,
+  backend: BACKEND_URL,
 });
 
-process.on('unhandledRejection', (reason) => {
-    log('error', 'Promise rejeitada', { error: String(reason) });
-    sendEvent('error', { error: String(reason) });
-});
-
-// Sinais de sistema
-process.on('SIGINT', async () => {
-    log('info', 'Recebido SIGINT, encerrando...');
-    if (client) {
-        await client.destroy().catch(() => {});
-    }
-    process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-    log('info', 'Recebido SIGTERM, encerrando...');
-    if (client) {
-        await client.destroy().catch(() => {});
-    }
-    process.exit(0);
-});
-
-// Inicializar
-log('info', 'Iniciando WhatsApp Bot Bridge...', { bot_id: BOT_ID, session_id: SESSION_ID });
-client = createClient();
-client.initialize().catch(err => {
-    log('error', 'Erro ao inicializar cliente', { error: err.message });
-    sendEvent('error', { error: err.message, fatal: true });
-    process.exit(1);
-});
+const healthServer = startHealthCheckServer();
+startConnection();

@@ -12,6 +12,13 @@ class ChatMessage(BaseModel):
     session_id: str = ""
 
 
+class SendMessageRequest(BaseModel):
+    bot_id: str
+    to: str
+    content: str
+    message_type: str = "text"
+
+
 class ChatHistoryRequest(BaseModel):
     bot_id: str
     user_phone: Optional[str] = None
@@ -33,17 +40,13 @@ class ChatHistoryItem(BaseModel):
 class ChatHistoryResponse(BaseModel):
     items: List[ChatHistoryItem]
     total: int
-    limit: int
-    offset: int
-
-
-class ChatConversationsRequest(BaseModel):
-    bot_id: str
-    limit: int = 20
-    offset: int = 0
+    page: int
+    page_size: int
 
 
 class ChatConversation(BaseModel):
+    bot_id: str
+    bot_name: str
     user_phone: str
     last_message: str
     last_message_at: datetime

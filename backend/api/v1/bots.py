@@ -1,233 +1,172 @@
-"""Bot Endpoints — CRUD de bots com persistência real."""
+"""Flora Platform — Bot Management Endpoints"""
+from __future__ import annotations
+
+import logging
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user, get_db
-from backend.core.chat_engine import ChatEngine
-from backend.models.bot import Bot
+from backend.models.bot import Bot, BotStatus
 from backend.models.user import User
-from backend.schemas.bot import BotCreate, BotUpdate, BotResponse
-from backend.services.bot_service import BotService
+from backend.schemas.bot import BotCreateRequest, BotResponse, BotUpdate
 
-router = APIRouter()
-
-
-class WhatsAppWebhook(BaseModel):
-    """Payload do webhook WhatsApp."""
-    text: str
-    contact_id: str
-    contact_name: str = "Usuario"
-    bot_id: str = ""
-    timestamp: str = ""
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/bots", tags=["bots"])
 
 
-# ─── CRUD de Bots ─────────────────────────────────────────
-
-@router.get("/", response_model=dict)
+@router.get("")
 async def list_bots(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
     page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    page_size: int = Query(20, ge=1, le=100),
 ):
-    """Lista bots do usuário autenticado."""
-    result = await BotService.list_bots(db, str(current_user.id), page, per_page)
-    return result
+    """List all bots owned by the current user."""
+    query = select(Bot).where(Bot.owner_id == current_user.id)
+    count_query = select(func.count(Bot.id)).where(Bot.owner_id == current_user.id)
 
+    total = (await db.execute(count_query)).scalar()
+    query = query.order_by(Bot.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    bots = result.scalars().all()
 
-@router.post("/", response_model=dict, status_code=status.HTTP_201_CREATED)
-async def create_bot(
-    data: BotCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Cria um novo bot."""
-    bot = await BotService.create_bot(db, str(current_user.id), data)
     return {
-        "id": str(bot.id),
-        "name": bot.name,
-        "description": bot.description,
-        "personality": bot.personality,
-        "welcome_message": bot.welcome_message,
-        "is_active": bot.is_active,
-        "created_at": bot.created_at.isoformat() if bot.created_at else None,
+        "bots": [BotResponse.model_validate(b) for b in bots],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 
-@router.get("/{bot_id}", response_model=dict)
+@router.get("/{bot_id}")
 async def get_bot(
     bot_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Obtém detalhes de um bot."""
-    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
+    """Get a specific bot by ID."""
+    result = await db.execute(
+        select(Bot).where(Bot.id == bot_id, Bot.owner_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot não encontrado")
-
-    return {
-        "id": str(bot.id),
-        "name": bot.name,
-        "description": bot.description,
-        "personality": bot.personality,
-        "welcome_message": bot.welcome_message,
-        "farewell_message": bot.farewell_message,
-        "is_active": bot.is_active,
-        "config": bot.config,
-        "created_at": bot.created_at.isoformat() if bot.created_at else None,
-        "updated_at": bot.updated_at.isoformat() if bot.updated_at else None,
-    }
+    return BotResponse.model_validate(bot)
 
 
-@router.put("/{bot_id}", response_model=dict)
-async def update_bot(
-    bot_id: str,
-    data: BotUpdate,
+@router.post("", response_model=BotResponse, status_code=status.HTTP_201_CREATED)
+async def create_bot(
+    body: BotCreateRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Atualiza um bot existente."""
-    bot = await BotService.update_bot(db, bot_id, str(current_user.id), data)
+    """Create a new bot for the current user."""
+    # Check license allows bot creation
+    from backend.services.license_service import LicenseService
+    license_check = await LicenseService().check_license_for_bot_creation(db, str(current_user.id))
+    if not license_check["can_create"]:
+        raise HTTPException(status_code=403, detail=license_check["reason"])
+
+    bot = Bot(
+        id=str(uuid.uuid4()),
+        name=body.name,
+        description=body.description or "",
+        owner_id=str(current_user.id),
+        status=BotStatus.DISCONNECTED,
+        system_prompt=body.system_prompt or "",
+        welcome_message=body.welcome_message or "Olá! 👋 Como posso te ajudar?",
+        personality=body.personality or "friendly",
+        language=body.language or "pt-BR",
+        is_active=False,
+    )
+    db.add(bot)
+    await db.commit()
+    await db.refresh(bot)
+    logger.info(f"Bot created: {bot.name} by user {current_user.id}")
+    return BotResponse.model_validate(bot)
+
+
+@router.put("/{bot_id}")
+async def update_bot(
+    bot_id: str,
+    body: BotUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a bot's configuration."""
+    result = await db.execute(
+        select(Bot).where(Bot.id == bot_id, Bot.owner_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot não encontrado")
 
-    return {
-        "id": str(bot.id),
-        "name": bot.name,
-        "description": bot.description,
-        "personality": bot.personality,
-        "welcome_message": bot.welcome_message,
-        "is_active": bot.is_active,
-        "updated_at": bot.updated_at.isoformat() if bot.updated_at else None,
-    }
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if hasattr(bot, field) and value is not None:
+            setattr(bot, field, value)
+
+    await db.commit()
+    await db.refresh(bot)
+    return BotResponse.model_validate(bot)
 
 
-@router.delete("/{bot_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{bot_id}")
 async def delete_bot(
     bot_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Deleta um bot."""
-    success = await BotService.delete_bot(db, bot_id, str(current_user.id))
-    if not success:
-        raise HTTPException(status_code=404, detail="Bot não encontrado")
-    return None
-
-
-@router.post("/{bot_id}/clone", response_model=dict)
-async def clone_bot(
-    bot_id: str,
-    new_name: str = Query(..., min_length=1),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Clona um bot existente."""
-    bot = await BotService.clone_bot(db, bot_id, str(current_user.id), new_name)
+    """Delete a bot and all associated data."""
+    result = await db.execute(
+        select(Bot).where(Bot.id == bot_id, Bot.owner_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
     if not bot:
-        raise HTTPException(status_code=404, detail="Bot original não encontrado")
+        raise HTTPException(status_code=404, detail="Bot não encontrado")
 
-    return {
-        "id": str(bot.id),
-        "name": bot.name,
-        "message": "Bot clonado com sucesso",
-    }
+    await db.delete(bot)
+    await db.commit()
+    return {"success": True, "message": "Bot removido com sucesso"}
 
 
-@router.get("/{bot_id}/stats", response_model=dict)
-async def get_bot_stats(
+@router.post("/{bot_id}/activate")
+async def activate_bot(
     bot_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Obtém estatísticas de um bot."""
-    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
+    """Activate a bot (enable message processing)."""
+    result = await db.execute(
+        select(Bot).where(Bot.id == bot_id, Bot.owner_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot não encontrado")
 
-    stats = await BotService.get_bot_stats(db, bot_id)
-    return stats
+    bot.is_active = True
+    await db.commit()
+    return {"success": True, "message": "Bot ativado"}
 
 
-@router.post("/{bot_id}/toggle", response_model=dict)
-async def toggle_bot(
+@router.post("/{bot_id}/deactivate")
+async def deactivate_bot(
     bot_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Alterna status ativo/inativo do bot."""
-    bot = await BotService.toggle_bot_active(db, bot_id, str(current_user.id))
+    """Deactivate a bot (pause message processing)."""
+    result = await db.execute(
+        select(Bot).where(Bot.id == bot_id, Bot.owner_id == current_user.id)
+    )
+    bot = result.scalar_one_or_none()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot não encontrado")
 
-    return {
-        "id": str(bot.id),
-        "is_active": bot.is_active,
-        "message": f"Bot {'ativado' if bot.is_active else 'desativado'}",
-    }
-
-
-# ─── Teste de Bot ─────────────────────────────────────────
-
-@router.post("/{bot_id}/test", response_model=dict)
-async def test_bot(
-    bot_id: str,
-    message: str = Query(..., min_length=1),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Envia mensagem de teste para um bot."""
-    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot não encontrado")
-
-    if not bot.is_active:
-        raise HTTPException(status_code=400, detail="Bot está inativo")
-
-    chat_engine = ChatEngine(db, bot)
-    result = await chat_engine.process_message(message)
-
-    return {
-        "bot_id": bot_id,
-        "input": message,
-        "output": result["content"],
-        "type": result["type"],
-        "session_id": result["session_id"],
-    }
-
-
-# ─── Webhook WhatsApp ─────────────────────────────────────
-
-@router.post("/webhook/whatsapp", response_model=dict)
-async def whatsapp_webhook(
-    data: WhatsAppWebhook,
-    db: AsyncSession = Depends(get_db),
-):
-    """Endpoint público para receber mensagens do WhatsApp."""
-    bot = None
-    if data.bot_id:
-        result = await db.execute(select(Bot).where(Bot.id == data.bot_id))
-        bot = result.scalar_one_or_none()
-
-    if not bot:
-        result = await db.execute(select(Bot).where(Bot.is_active == True).limit(1))
-        bot = result.scalar_one_or_none()
-
-    if not bot:
-        return {"reply": "Bot não configurado. Entre em contato com o administrador."}
-
-    if not bot.is_active:
-        return {"reply": "Bot temporariamente indisponível."}
-
-    chat_engine = ChatEngine(db, bot)
-    result = await chat_engine.process_message(data.text)
-
-    return {
-        "reply": result["content"],
-        "bot_id": str(bot.id),
-        "type": result["type"],
-    }
+    bot.is_active = False
+    await db.commit()
+    return {"success": True, "message": "Bot desativado"}

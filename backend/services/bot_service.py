@@ -18,7 +18,7 @@ class BotService:
         """Cria um novo bot."""
         bot = Bot(
             id=str(uuid4()),
-            user_id=user_id,
+            owner_id=user_id,
             name=data.name,
             description=data.description or "",
             personality=data.personality or "amigável e prestativa",
@@ -37,7 +37,7 @@ class BotService:
         """Busca bot por ID. Se user_id fornecido, verifica propriedade."""
         query = select(Bot).where(Bot.id == bot_id)
         if user_id:
-            query = query.where(Bot.user_id == user_id)
+            query = query.where(Bot.owner_id == user_id)
 
         result = await db.execute(query)
         return result.scalar_one_or_none()
@@ -49,7 +49,7 @@ class BotService:
         """Lista bots do usuário com paginação."""
         # Count total
         count_result = await db.execute(
-            select(func.count()).where(Bot.user_id == user_id)
+            select(func.count()).where(Bot.owner_id == user_id)
         )
         total = count_result.scalar() or 0
 
@@ -57,7 +57,7 @@ class BotService:
         offset = (page - 1) * per_page
         result = await db.execute(
             select(Bot)
-            .where(Bot.user_id == user_id)
+            .where(Bot.owner_id == user_id)
             .order_by(Bot.created_at.desc())
             .offset(offset)
             .limit(per_page)
@@ -81,7 +81,7 @@ class BotService:
         if not bot:
             return None
 
-        update_data = data.dict(exclude_unset=True)
+        update_data = data.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(bot, field, value)
 
@@ -117,7 +117,7 @@ class BotService:
 
         cloned = Bot(
             id=str(uuid4()),
-            user_id=user_id,
+            owner_id=user_id,
             name=new_name,
             description=f"Cópia de {original.name}",
             personality=original.personality,
@@ -148,8 +148,8 @@ class BotService:
         unique_users = unique_users_result.scalar() or 0
 
         # Mensagens nas últimas 24h
-        from datetime import datetime, timedelta
-        day_ago = datetime.utcnow() - timedelta(days=1)
+        from datetime import datetime, timedelta, timezone
+        day_ago = datetime.now(timezone.utc) - timedelta(days=1)
         recent_result = await db.execute(
             select(func.count())
             .where(Message.bot_id == bot_id)

@@ -1,202 +1,392 @@
-"""Command Engine - Motor de comandos personalizados."""
+"""
+Flora Platform — Command Engine
+================================
+Parses and executes bot commands from user messages.
+
+Commands start with / or ! and can be:
+- Built-in commands (help, reset, config, stats)
+- Custom commands defined per bot
+- Flora AI specific commands
+"""
+
+import logging
 import re
-from datetime import datetime
-from typing import Callable, Optional
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+logger = logging.getLogger(__name__)
 
-from backend.models.bot import Bot
-from backend.models.command import Command
+
+@dataclass
+class Command:
+    """Represents a bot command."""
+    name: str
+    description: str
+    usage: str = ""
+    handler: Optional[Callable] = None
+    admin_only: bool = False
+    category: str = "general"
+
+
+@dataclass
+class CommandResult:
+    """Result of command execution."""
+    success: bool
+    response: str
+    data: Any = None
+    error: str = ""
 
 
 class CommandEngine:
-    """Motor de comandos personalizados com parsing e execução."""
+    """
+    Parses and executes bot commands.
 
-    def __init__(self, db: AsyncSession, bot: Bot):
-        self.db = db
-        self.bot = bot
-        self._custom_handlers: dict[str, Callable] = {}
+    Built-in commands:
+    - /help - Show available commands
+    - /reset - Reset chat session
+    - /config - Show bot configuration
+    - /stats - Show usage statistics
+    - /language - Change language
+    """
 
-    def register_command(self, name: str, handler: Callable):
-        """Registra um handler customizado para um comando."""
-        self._custom_handlers[name.lower()] = handler
+    def __init__(self):
+        self._commands: dict[str, Command] = {}
+        self._custom_commands: dict[str, Command] = {}
+        self._register_builtins()
+        logger.info(f"CommandEngine initialized with {len(self._commands)} built-in commands")
 
-    async def get_commands(self) -> list[Command]:
-        """Lista todos os comandos ativos do bot."""
-        result = await self.db.execute(
-            select(Command).where(
-                Command.bot_id == self.bot.id,
-                Command.is_active == True,
-            )
-        )
-        return result.scalars().all()
+    def _register_builtins(self):
+        """Register built-in commands."""
+        builtins = [
+            Command(
+                name="help",
+                description="Mostra os comandos disponíveis",
+                usage="/help [comando]",
+                handler=self._cmd_help,
+                category="general",
+            ),
+            Command(
+                name="reset",
+                description="Reinicia a conversa atual",
+                usage="/reset",
+                handler=self._cmd_reset,
+                category="general",
+            ),
+            Command(
+                name="config",
+                description="Mostra a configuração do bot",
+                usage="/config",
+                handler=self._cmd_config,
+                category="general",
+            ),
+            Command(
+                name="stats",
+                description="Mostra estatísticas de uso",
+                usage="/stats",
+                handler=self._cmd_stats,
+                category="general",
+            ),
+            Command(
+                name="language",
+                description="Altera o idioma do bot",
+                usage="/language [pt/en/es]",
+                handler=self._cmd_language,
+                category="general",
+            ),
+            Command(
+                name="menu",
+                description="Mostra o menu principal",
+                usage="/menu",
+                handler=self._cmd_menu,
+                category="general",
+            ),
+            Command(
+                name="agendar",
+                description="Inicia um agendamento",
+                usage="/agendar",
+                handler=self._cmd_schedule,
+                category="business",
+            ),
+            Command(
+                name="suporte",
+                description="Abre um chamado de suporte",
+                usage="/suporte [mensagem]",
+                handler=self._cmd_support,
+                category="general",
+            ),
+            Command(
+                name="botinfo",
+                description="Informações sobre este bot",
+                usage="/botinfo",
+                handler=self._cmd_botinfo,
+                category="general",
+            ),
+            Command(
+                name="admin",
+                description="Comandos administrativos (apenas admin)",
+                usage="/admin [subcomando]",
+                handler=self._cmd_admin,
+                admin_only=True,
+                category="admin",
+            ),
+        ]
 
-    async def parse_and_execute(self, text: str) -> Optional[dict]:
-        """
-        Analisa o texto e executa comando se encontrado.
+        for cmd in builtins:
+            self._commands[f"/{cmd.name}"] = cmd
+            self._commands[f"!{cmd.name}"] = cmd
 
-        Suporta formatos:
-        - /comando
-        - /comando parametro1 parametro2
-        - !comando
-        - comando: parametros
-
-        Args:
-            text: Texto da mensagem
-
-        Returns:
-            dict com resultado ou None se não for comando
-        """
-        text = text.strip()
-
-        # Extrair comando do texto
-        command_name, params = self._extract_command(text)
-
-        if not command_name:
-            return None
-
-        # Buscar comando no banco
-        result = await self.db.execute(
-            select(Command).where(
-                Command.bot_id == self.bot.id,
-                Command.is_active == True,
-            )
-        )
-        commands = result.scalars().all()
-
-        matched_command = None
-        for cmd in commands:
-            triggers = []
-            if cmd.trigger:
-                triggers = [t.strip().lower() for t in cmd.trigger.split(",")]
-            if command_name.lower() in triggers or command_name.lower() == cmd.name.lower():
-                matched_command = cmd
-                break
-
-        if not matched_command:
-            return None
-
-        # Executar comando
-        return await self._execute_command(matched_command, params)
-
-    def _extract_command(self, text: str) -> tuple[Optional[str], list[str]]:
-        """Extrai nome do comando e parâmetros do texto."""
-        text = text.strip()
-
-        # Formato /comando ou !comando
-        if text.startswith("/") or text.startswith("!"):
-            parts = text[1:].split()
-            if parts:
-                return parts[0], parts[1:]
-            return None, []
-
-        # Formato "comando: parametros"
-        if ":" in text:
-            parts = text.split(":", 1)
-            command_part = parts[0].strip()
-            params_part = parts[1].strip()
-            params = params_part.split() if params_part else []
-            return command_part, params
-
-        # Formato "comando parametros" (verifica se primeira palavra é comando)
-        words = text.split()
-        if len(words) >= 1:
-            # Verificar se a primeira palavra é um comando conhecido
-            return words[0], words[1:]
-
-        return None, []
-
-    async def _execute_command(self, command: Command, params: list[str]) -> dict:
-        """Executa um comando com os parâmetros fornecidos."""
-        # Verificar handler customizado
-        handler = self._custom_handlers.get(command.name.lower())
-        if handler:
-            try:
-                if callable(handler):
-                    import asyncio
-                    if asyncio.iscoroutinefunction(handler):
-                        result = await handler(params, command)
-                    else:
-                        result = handler(params, command)
-                else:
-                    result = None
-                if result:
-                    return {
-                        "command_name": command.name,
-                        "response": str(result),
-                        "type": "custom_handler",
-                    }
-            except Exception as e:
-                return {
-                    "command_name": command.name,
-                    "response": f"Erro ao executar comando: {str(e)}",
-                    "type": "error",
-                }
-
-        # Usar resposta padrão do comando
-        response = command.response or "Comando executado com sucesso."
-
-        # Substituir variáveis na resposta
-        response = self._substitute_variables(response, params, command)
-
-        return {
-            "command_name": command.name,
-            "response": response,
-            "type": "static",
-            "params": params,
-        }
-
-    def _substitute_variables(self, response: str, params: list[str], command: Command) -> str:
-        """Substitui variáveis na resposta do comando."""
-        # {param1}, {param2}, etc.
-        for i, param in enumerate(params):
-            response = response.replace(f"{{param{i+1}}}", param)
-            response = response.replace(f"{{param{i}}}", param)
-
-        # {params} = todos os parâmetros
-        response = response.replace("{params}", " ".join(params))
-
-        # {command} = nome do comando
-        response = response.replace("{command}", command.name or "")
-
-        # {date} = data atual
-        response = response.replace("{date}", datetime.now().strftime("%d/%m/%Y"))
-
-        # {time} = hora atual
-        response = response.replace("{time}", datetime.now().strftime("%H:%M"))
-
-        # {bot_name} = nome do bot
-        response = response.replace("{bot_name}", self.bot.name or "Bot")
-
-        return response
-
-    async def create_command(
-        self, name: str, trigger: str, response: str, description: str = "", parameters: Optional[dict] = None
-    ) -> Command:
-        """Cria um novo comando."""
+    def register_command(
+        self,
+        name: str,
+        handler: Callable,
+        description: str = "",
+        usage: str = "",
+        category: str = "custom",
+        admin_only: bool = False,
+    ) -> None:
+        """Register a custom command."""
         cmd = Command(
-            bot_id=self.bot.id,
-            name=name,
-            trigger=trigger,
-            response=response,
+            name=name.lstrip("/!"),
             description=description,
-            parameters=parameters or {},
-            is_active=True,
+            usage=usage or f"/{name}",
+            handler=handler,
+            admin_only=admin_only,
+            category=category,
         )
-        self.db.add(cmd)
-        await self.db.commit()
-        await db.refresh(cmd)
-        return cmd
+        self._commands[f"/{cmd.name}"] = cmd
+        self._custom_commands[f"/{cmd.name}"] = cmd
+        logger.info(f"Command registered: /{cmd.name}")
 
-    async def test_command(self, command_text: str, input_text: str) -> dict:
-        """Testa um comando com input simulado."""
-        result = await self.parse_and_execute(input_text)
-        if result:
-            return result
+    def unregister_command(self, name: str) -> bool:
+        """Remove a custom command."""
+        key = f"/{name.lstrip('/!')}"
+        if key in self._custom_commands:
+            del self._commands[key]
+            del self._custom_commands[key]
+            logger.info(f"Command unregistered: {key}")
+            return True
+        return False
 
-        return {
-            "command_name": None,
-            "response": "Nenhum comando encontrado para o texto fornecido.",
-            "type": "test",
+    async def execute(self, message: str, context: Any = None) -> Optional[str]:
+        """
+        Parse and execute a command from a message.
+
+        Returns the command response string, or None if not a command
+        or the command is not recognized.
+        """
+        if not self._is_command(message):
+            return None
+
+        # Parse command and arguments
+        parts = message.strip().split(maxsplit=1)
+        cmd_key = parts[0].lower()
+        args = parts[1] if len(parts) > 1 else ""
+
+        command = self._commands.get(cmd_key)
+        if not command:
+            return None
+
+        if not command.handler:
+            return f"Comando {cmd_key} não implementado."
+
+        logger.info(f"Executing command: {cmd_key} args='{args}'")
+
+        try:
+            result = await command.handler(args, context, command)
+            if isinstance(result, CommandResult):
+                return result.response
+            return str(result)
+        except Exception as e:
+            logger.error(f"Command error: {cmd_key} - {e}", exc_info=True)
+            return "Erro ao executar o comando. Tente novamente."
+
+    def _is_command(self, message: str) -> bool:
+        """Check if a message starts with a command prefix and matches a known command."""
+        if not message:
+            return False
+        message = message.strip()
+        if not (message.startswith("/") or message.startswith("!")):
+            return False
+        parts = message.split(maxsplit=1)
+        cmd_key = parts[0].lower()
+        return cmd_key in self._commands
+
+    def get_commands(self, category: Optional[str] = None, include_admin: bool = False) -> list[Command]:
+        """Get registered commands."""
+        commands = list(self._commands.values())
+        if category:
+            commands = [c for c in commands if c.category == category]
+        if not include_admin:
+            commands = [c for c in commands if not c.admin_only]
+        # De-duplicate (each command is registered with / and !)
+        seen = set()
+        unique = []
+        for cmd in commands:
+            if cmd.name not in seen:
+                seen.add(cmd.name)
+                unique.append(cmd)
+        return unique
+
+    # ─── Built-in Command Handlers ───────────────────────────────
+
+    async def _cmd_help(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        if args:
+            # Help for a specific command
+            target = args.strip().lower()
+            if not target.startswith("/"):
+                target = f"/{target}"
+            found = self._commands.get(target)
+            if found:
+                return CommandResult(
+                    success=True,
+                    response=f"*{found.name}*\n{found.description}\n\nUso: {found.usage}",
+                )
+            return CommandResult(
+                success=False,
+                response=f"Comando {target} não encontrado.",
+            )
+
+        # List all commands
+        categories = {}
+        for c in self.get_commands(include_admin=False):
+            categories.setdefault(c.category, []).append(c)
+
+        lines = ["*Comandos disponiveis:*\n"]
+        for cat, cmds in sorted(categories.items()):
+            lines.append(f"*{cat.title()}:*")
+            for c in cmds:
+                lines.append(f"  {c.usage or '/' + c.name} - {c.description}")
+            lines.append("")
+
+        lines.append("Digite /help [comando] para mais detalhes.")
+        return CommandResult(success=True, response="\n".join(lines))
+
+    async def _cmd_reset(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        return CommandResult(
+            success=True,
+            response="Conversa reiniciada! Como posso te ajudar?",
+        )
+
+    async def _cmd_config(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        bot_name = "Flora Bot"
+        if context and hasattr(context, "metadata"):
+            bot_name = context.metadata.get("bot_name", "Flora Bot")
+
+        return CommandResult(
+            success=True,
+            response=(
+                f"*Configuracao do Bot*\n"
+                f"Nome: {bot_name}\n"
+                f"Idioma: Portugues (BR)\n"
+                f"Versao: 1.0.0"
+            ),
+        )
+
+    async def _cmd_stats(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        return CommandResult(
+            success=True,
+            response=(
+                "*Estatisticas de Uso*\n"
+                "Mensagens hoje: --\n"
+                "Mensagens totais: --\n"
+                "Tempo medio de resposta: --ms\n\n"
+                "_Estatisticas detalhadas disponiveis no painel admin._"
+            ),
+        )
+
+    async def _cmd_language(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        if not args:
+            return CommandResult(
+                success=True,
+                response=(
+                    "Idiomas disponiveis:\n"
+                    "/language pt - Portugues\n"
+                    "/language en - English\n"
+                    "/language es - Espanol"
+                ),
+            )
+
+        lang = args.strip().lower()
+        lang_map = {
+            "pt": ("pt-BR", "Portugues"),
+            "en": ("en-US", "English"),
+            "es": ("es", "Espanol"),
         }
+
+        if lang in lang_map:
+            code, name = lang_map[lang]
+            return CommandResult(
+                success=True,
+                response=f"Idioma alterado para *{name}* ({code})",
+            )
+        return CommandResult(
+            success=False,
+            response=f"Idioma '{lang}' nao suportado. Use: pt, en, ou es.",
+        )
+
+    async def _cmd_menu(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        return CommandResult(
+            success=True,
+            response=(
+                "*Menu Principal*\n\n"
+                "1. Atendimento\n"
+                "2. Agendamento\n"
+                "3. Informacoes\n"
+                "4. Suporte\n\n"
+                "Digite o numero ou nome da opcao desejada."
+            ),
+        )
+
+    async def _cmd_schedule(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        return CommandResult(
+            success=True,
+            response=(
+                "*Agendamento*\n\n"
+                "Para agendar, me informe:\n"
+                "- Data desejada\n"
+                "- Horario preferido\n"
+                "- Tipo de servico\n\n"
+                "Ou digite /cancelar para voltar."
+            ),
+        )
+
+    async def _cmd_support(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        if args:
+            return CommandResult(
+                success=True,
+                response=(
+                    "Chamado de suporte registrado!\n\n"
+                    f"Mensagem: {args}\n\n"
+                    "Um atendente retornara em breve."
+                ),
+            )
+        return CommandResult(
+            success=True,
+            response="Digite sua mensagem de suporte apos o comando.\nExemplo: /suporte Minha duvida e sobre...",
+        )
+
+    async def _cmd_botinfo(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        return CommandResult(
+            success=True,
+            response=(
+                "*Flora Bot*\n\n"
+                "Powered by Flora Platform\n"
+                "Versao: 1.0.0\n"
+                "AI: Multi-provider LLM\n\n"
+                "_Um chatbot inteligente para seu negocio._"
+            ),
+        )
+
+    async def _cmd_admin(self, args: str, context: Any, cmd: Command) -> CommandResult:
+        return CommandResult(
+            success=True,
+            response=(
+                "*Painel Admin*\n\n"
+                "Comandos administrativos:\n"
+                "/admin users - Listar usuarios\n"
+                "/admin bots - Listar bots\n"
+                "/admin stats - Estatisticas\n"
+                "/admin broadcast - Enviar mensagem"
+            ),
+        )

@@ -1,43 +1,35 @@
-# =============================================
-# FLORA PLATFORM - Dockerfile
-# =============================================
+# 🌸 Flora Platform — Dockerfile (Backend)
+FROM python:3.11-slim AS base
 
-# Base image
-FROM python:3.11-slim
+# Metadados
+LABEL maintainer="TiltzOff <contato@flora.com>"
+LABEL description="🌸 Flora Platform — Backend FastAPI"
 
-# Set working directory
+# Diretório de trabalho
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    libpq-dev \
+# Instalar dependências do sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN adduser --disabled-password --gecos '' appuser
-
-# Copy requirements and install Python dependencies
+# Copiar requirements primeiro (cache de camada)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copiar código
 COPY . .
 
-# Change ownership to non-root user
-RUN chown -R appuser:appuser /app
+# Criar diretórios necessários
+RUN mkdir -p logs whatsapp_sessions uploads backups
 
-# Switch to non-root user
-USER appuser
-
-# Expose port
+# Expor porta
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# Run application
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Comando padrão
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

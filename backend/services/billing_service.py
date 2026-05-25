@@ -194,7 +194,7 @@ class BillingService:
         # Find all active bots for this user
         bots_result = await db.execute(
             select(Bot)
-            .where(Bot.user_id == subscription.user_id)
+            .where(Bot.owner_id == subscription.user_id)
             .where(Bot.status == BotStatus.CONNECTED)
         )
         bots = bots_result.scalars().all()

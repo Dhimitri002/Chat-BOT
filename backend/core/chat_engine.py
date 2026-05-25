@@ -1,172 +1,250 @@
-"""Chat Engine - Motor de chat que roteia entre comandos e LLM."""
-import uuid
-from datetime import datetime
-from typing import Optional
+"""
+Flora Platform — Chat Engine
+=============================
+Processes incoming chat messages through the pipeline:
+1. Pre-processing (sanitize, detect language)
+2. Intent detection
+3. Context assembly (memory, bot config)
+4. LLM request
+5. Post-processing (format, filter)
+6. Response delivery
+"""
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from backend.core.command_engine import CommandEngine
-from backend.core.flora_engine import FloraEngine
-from backend.core.llm_router import LLMRouter
-from backend.models.bot import Bot
-from backend.models.message import Message
+from backend.core.llm_router import LLMResponse
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ChatContext:
+    """Context for a chat interaction."""
+    bot_id: str
+    user_id: str
+    user_name: str = ""
+    user_phone: str = ""
+    session_id: str = ""
+    messages: list[dict] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
+    language: str = "pt-BR"
+
+
+@dataclass
+class ChatResult:
+    """Result of chat processing."""
+    response: str
+    success: bool = True
+    error: str = ""
+    llm_response: Optional[LLMResponse] = None
+    intent: str = ""
+    confidence: float = 0.0
+    processing_time_ms: float = 0.0
+    timestamp: str = ""
+
+    def __post_init__(self):
+        if not self.timestamp:
+            self.timestamp = datetime.now(timezone.utc).isoformat()
 
 
 class ChatEngine:
-    """Motor de chat principal. Roteia mensagens entre comandos e LLM."""
+    """
+    Main chat processing pipeline.
 
-    def __init__(self, db: AsyncSession, bot: Bot):
-        self.db = db
-        self.bot = bot
-        self.llm_router = LLMRouter()
-        self.flora_engine = FloraEngine(db, bot, self.llm_router)
-        self.command_engine = CommandEngine(db, bot)
+    Handles:
+    - Message pre-processing
+    - Context assembly
+    - LLM routing
+    - Response post-processing
+    - Error handling
+    """
+
+    def __init__(
+        self,
+        llm_router=None,
+        command_engine=None,
+        flora_engine=None,
+        max_history: int = 20,
+        default_language: str = "pt-BR",
+    ):
+        self._router = llm_router
+        self._commands = command_engine
+        self._flora = flora_engine
+        self._max_history = max_history
+        self._default_language = default_language
+        self._sessions: dict[str, list[dict]] = {}
+
+        logger.info("ChatEngine initialized")
 
     async def process_message(
-        self, message: str, session_id: Optional[str] = None
-    ) -> dict:
+        self,
+        message: str,
+        context: ChatContext,
+    ) -> ChatResult:
         """
-        Processa uma mensagem e retorna a resposta.
+        Process an incoming message through the full pipeline.
 
-        Fluxo:
-        1. Tenta匹配 comando personalizado
-        2. Se não for comando, tenta匹配 intent
-        3. Se não for intent, usa Flora AI (LLM)
-
-        Args:
-            message: Texto da mensagem
-            session_id: ID da sessão de chat
-
-        Returns:
-            dict com content, type, session_id, metadata
+        Pipeline:
+        1. Pre-process message
+        2. Check for commands
+        3. Assemble context (history + bot config)
+        4. Send to LLM
+        5. Post-process response
+        6. Return result
         """
-        # Criar session_id se não existir
-        if not session_id:
-            session_id = str(uuid.uuid4())
+        start = time.time()
 
-        # 1. Tentar comando personalizado
-        command_result = await self.command_engine.parse_and_execute(message)
-        if command_result:
-            response_content = command_result.get("response", "")
-            await self._save_message(session_id, message, "inbound")
-            await self._save_message(session_id, response_content, "outbound", {
-                "type": "command",
-                "command": command_result.get("command_name"),
-            })
-            return {
-                "content": response_content,
-                "type": "command",
-                "session_id": session_id,
-                "metadata": command_result,
-            }
+        try:
+            # Step 1: Pre-process
+            clean_message = self._preprocess(message)
+            if not clean_message:
+                return ChatResult(
+                    response="Desculpe, não entendi sua mensagem. Pode reformular?",
+                    success=True,
+                    processing_time_ms=(time.time() - start) * 1000,
+                )
 
-        # 2. Tentar intent matching
-        intent_result = await self._match_intent(message)
-        if intent_result:
-            response_content = intent_result.get("response", "")
-            await self._save_message(session_id, message, "inbound")
-            await self._save_message(session_id, response_content, "outbound", {
-                "type": "intent",
-                "intent": intent_result.get("intent_name"),
-                "confidence": intent_result.get("confidence", 0),
-            })
-            return {
-                "content": response_content,
-                "type": "intent",
-                "session_id": session_id,
-                "metadata": intent_result,
-            }
+            # Step 2: Check for commands
+            if self._commands and self._is_command(clean_message):
+                cmd_result = await self._commands.execute(clean_message, context)
+                if cmd_result:
+                    return ChatResult(
+                        response=cmd_result,
+                        success=True,
+                        intent="command",
+                        confidence=1.0,
+                        processing_time_ms=(time.time() - start) * 1000,
+                    )
 
-        # 3. Usar Flora AI (LLM)
-        flora_result = await self.flora_engine.chat(message, session_id)
-        await self._save_message(session_id, message, "inbound")
-        await self._save_message(session_id, flora_result["content"], "outbound", {
-            "type": "llm",
-            "model": flora_result.get("model"),
-            "provider": flora_result.get("provider"),
-            "usage": flora_result.get("usage"),
-        })
+            # Step 3: Assemble context
+            history = self._get_history(context.session_id)
+            history.append({"role": "user", "content": clean_message})
 
-        return {
-            "content": flora_result["content"],
-            "type": "llm",
-            "session_id": session_id,
-            "metadata": {
-                "model": flora_result.get("model"),
-                "provider": flora_result.get("provider"),
-                "usage": flora_result.get("usage"),
-            },
-        }
+            # Step 4: Send to LLM
+            if self._router:
+                llm_response = await self._router.chat(
+                    messages=history,
+                    system=self._build_system_prompt(context),
+                    temperature=0.7,
+                    max_tokens=2048,
+                )
+                response_text = llm_response.content
+            elif self._flora:
+                llm_response = await self._flora.generate(
+                    message=clean_message,
+                    context=context,
+                    history=history,
+                )
+                response_text = llm_response
+            else:
+                response_text = "Desculpe, o assistente não está disponível no momento."
 
-    async def _match_intent(self, message: str) -> Optional[dict]:
-        """Tenta匹配 a mensagem com um intent treinado."""
-        from backend.models.intent import Intent
+            # Step 5: Post-process
+            response_text = self._postprocess(response_text, context)
 
-        result = await self.db.execute(
-            select(Intent).where(
-                Intent.bot_id == self.bot.id,
-                Intent.is_active == True,
+            # Update history
+            history.append({"role": "assistant", "content": response_text})
+            self._trim_history(context.session_id, history)
+
+            elapsed = (time.time() - start) * 1000
+
+            return ChatResult(
+                response=response_text,
+                success=True,
+                llm_response=llm_response if isinstance(llm_response, LLMResponse) else None,
+                processing_time_ms=elapsed,
             )
+
+        except Exception as e:
+            elapsed = (time.time() - start) * 1000
+            logger.error(f"ChatEngine error: {e}", exc_info=True)
+            return ChatResult(
+                response="Desculpe, ocorreu um erro ao processar sua mensagem. Tente novamente.",
+                success=False,
+                error=str(e),
+                processing_time_ms=elapsed,
+            )
+
+    def _preprocess(self, message: str) -> str:
+        """Clean and normalize incoming message."""
+        if not message:
+            return ""
+
+        # Strip whitespace
+        message = message.strip()
+
+        # Remove excessive whitespace
+        import re
+        message = re.sub(r"\s+", " ", message)
+
+        # Basic sanitization
+        if len(message) > 4000:
+            message = message[:4000]
+            logger.warning("Message truncated to 4000 chars")
+
+        return message
+
+    def _postprocess(self, response: str, context: ChatContext) -> str:
+        """Clean and format the response."""
+        if not response:
+            return "Desculpe, não consegui gerar uma resposta."
+
+        response = response.strip()
+
+        # Remove common LLM artifacts
+        if response.startswith("Assistant:"):
+            response = response[len("Assistant:"):].strip()
+        if response.startswith("Bot:"):
+            response = response[len("Bot:"):].strip()
+
+        return response
+
+    def _is_command(self, message: str) -> bool:
+        """Check if message is a bot command."""
+        return message.startswith("/") or message.startswith("!")
+
+    def _build_system_prompt(self, context: ChatContext) -> str:
+        """Build the system prompt from bot config and context."""
+        base_prompt = (
+            f"Você é um assistente virtual inteligente. "
+            f"Responda de forma clara, útil e amigável em português brasileiro."
         )
-        intents = result.scalars().all()
 
-        message_lower = message.lower().strip()
-        best_match = None
-        best_score = 0.0
+        if context.user_name:
+            base_prompt += f" O usuário se chama {context.user_name}."
 
-        for intent in intents:
-            training_phrases = intent.training_phrases or []
-            if isinstance(training_phrases, str):
-                try:
-                    training_phrases = json.loads(training_phrases)
-                except Exception:
-                    training_phrases = []
+        if context.metadata.get("bot_name"):
+            base_prompt += f" Você é o {context.metadata['bot_name']}."
 
-            for phrase in training_phrases:
-                phrase_lower = phrase.lower().strip()
-                # Matching simples: contém ou similar
-                if phrase_lower in message_lower or message_lower in phrase_lower:
-                    score = len(phrase_lower) / max(len(message_lower), 1)
-                    if score > best_score and score > 0.5:
-                        best_score = score
-                        best_match = intent
+        if context.metadata.get("system_prompt"):
+            base_prompt = context.metadata["system_prompt"]
 
-        if best_match:
-            responses = best_match.responses or []
-            if isinstance(responses, str):
-                try:
-                    responses = json.loads(responses)
-                except Exception:
-                    responses = []
+        return base_prompt
 
-            import random
-            response = random.choice(responses) if responses else "Entendi!"
+    def _get_history(self, session_id: str) -> list[dict]:
+        """Get message history for a session."""
+        if session_id not in self._sessions:
+            self._sessions[session_id] = []
+        return self._sessions[session_id]
 
-            return {
-                "intent_name": best_match.name,
-                "confidence": best_score,
-                "response": response,
-            }
+    def _trim_history(self, session_id: str, history: list[dict]) -> None:
+        """Trim history to max length."""
+        if len(history) > self._max_history * 2:
+            # Keep system message if present, trim the rest
+            system_msgs = [m for m in history if m.get("role") == "system"]
+            other_msgs = [m for m in history if m.get("role") != "system"]
+            history[:] = system_msgs + other_msgs[-self._max_history * 2:]
+        self._sessions[session_id] = history
 
-        return None
+    def clear_session(self, session_id: str) -> None:
+        """Clear a chat session."""
+        self._sessions.pop(session_id, None)
+        logger.info(f"Session cleared: {session_id}")
 
-    async def _save_message(
-        self, session_id: str, content: str, direction: str, metadata: Optional[dict] = None
-    ) -> Message:
-        """Salva mensagem no banco de dados."""
-        msg = Message(
-            bot_id=self.bot.id,
-            session_id=session_id,
-            content=content,
-            direction=direction,
-            message_type="text",
-            metadata=metadata or {},
-        )
-        self.db.add(msg)
-        await self.db.commit()
-        await self.db.refresh(msg)
-        return msg
-
-
-import json  # noqa: E402
+    def get_session_count(self) -> int:
+        """Return number of active sessions."""
+        return len(self._sessions)

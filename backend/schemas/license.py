@@ -1,19 +1,19 @@
 """License Schemas"""
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 
 
 class LicenseValidateRequest(BaseModel):
-    license_key: str = Field(..., pattern=r"^FLORA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
-    device_fingerprint: Optional[str] = None
+    license_key: str = Field(..., min_length=10, max_length=100)
+    device_fingerprint: Optional[str] = ""
 
 
 class LicenseValidateResponse(BaseModel):
     valid: bool
     reason: Optional[str] = None
     plan: Optional[dict] = None
-    expires_at: Optional[datetime] = None
+    expires_at: Optional[str] = None
     days_remaining: Optional[int] = None
     features: Optional[dict] = None
 
@@ -21,13 +21,16 @@ class LicenseValidateResponse(BaseModel):
 class LicenseResponse(BaseModel):
     id: str
     license_key: str
+    user_id: str
+    plan_id: str
     status: str
-    plan_name: str
-    client_name: str
-    expires_at: datetime
+    expires_at: Optional[datetime]
     days_remaining: int
     is_active: bool
     created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class LicenseCreateRequest(BaseModel):

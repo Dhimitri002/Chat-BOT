@@ -1,53 +1,273 @@
-"""Bot Panel Screen - Painel de controle do bot."""
-from kivy.utils import get_color_from_hex
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.button import MDRaisedButton, MDIconButton
-from kivymd.uix.label import MDLabel
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.card import MDCard
+"""
+Flora Platform — Bot Panel Screen
+=====================================
+Bot detail panel with status, quick actions, and navigation
+to chat, commands, WhatsApp, and settings.
+"""
+from kivy.app import App
+from kivy.clock import Clock
+from kivy.properties import StringProperty, BooleanProperty
+from kivy.uix.screenmanager import Screen
+from kivy.lang import Builder
+from kivy.metrics import dp
+
+Builder.load_string(
+    """
+<BotPanelScreen>:
+    name: "bot_panel"
+    canvas.before:
+        Color:
+            rgba: 0.102, 0.102, 0.18, 1
+        Rectangle:
+            pos: self.pos
+            size: self.size
+
+    BoxLayout:
+        orientation: "vertical"
+
+        # Top bar
+        BoxLayout:
+            size_hint_y: None
+            height: dp(56)
+            padding: dp(16), dp(8)
+            spacing: dp(12)
+
+            MDFlatButton:
+                text: "Voltar"
+                size_hint_x: None
+                width: dp(80)
+                text_color: 0.7, 0.7, 0.8, 1
+                on_release: root.go_back()
+
+            Label:
+                text: root.bot_name
+                font_size: "18sp"
+                bold: True
+                color: 1, 1, 1, 1
+                text_size: self.width, None
+                halign: "left"
+                shorten: True
+                shorten_from: "right"
+
+            Label:
+                text: root.status_emoji
+                font_size: "20sp"
+                size_hint_x: None
+                width: dp(36)
+
+        # Content
+        ScrollView:
+            do_scroll_x: False
+            BoxLayout:
+                orientation: "vertical"
+                size_hint_y: None
+                height: max(self.minimum_height, root.height - dp(56))
+                padding: dp(20)
+                spacing: dp(16)
+
+                # Status card
+                BoxLayout:
+                    orientation: "vertical"
+                    size_hint_y: None
+                    height: dp(100)
+                    padding: dp(20)
+                    spacing: dp(8)
+                    md_bg_color: root.status_card_color
+                    radius: [dp(16)]
+                    line_color: 0.2, 0.2, 0.3, 0.4
+                    line_width: dp(1)
+
+                    Label:
+                        text: root.status_title
+                        font_size: "18sp"
+                        bold: True
+                        color: 1, 1, 1, 1
+                        size_hint_y: None
+                        height: dp(28)
+                        text_size: self.width, None
+                        halign: "left"
+
+                    Label:
+                        text: root.status_desc
+                        font_size: "13sp"
+                        color: 0.7, 0.7, 0.8, 1
+                        text_size: self.width, None
+                        halign: "left"
+
+                # Quick actions grid
+                GridLayout:
+                    cols: 2
+                    spacing: dp(12)
+                    size_hint_y: None
+                    height: dp(200)
+
+                    # WhatsApp
+                    MDRaisedButton:
+                        text: "WhatsApp"
+                        size_hint_y: None
+                        height: dp(94)
+                        md_bg_color: 0.137, 0.129, 0.243, 0.6
+                        text_color: 1, 1, 1, 1
+                        line_color: 0.2, 0.2, 0.3, 0.4
+                        radius: [dp(16)]
+                        font_size: "14sp"
+                        on_release: root.go_whatsapp()
+
+                    # Chat test
+                    MDRaisedButton:
+                        text: "Testar Chat"
+                        size_hint_y: None
+                        height: dp(94)
+                        md_bg_color: 0.137, 0.129, 0.243, 0.6
+                        text_color: 1, 1, 1, 1
+                        line_color: 0.2, 0.2, 0.3, 0.4
+                        radius: [dp(16)]
+                        font_size: "14sp"
+                        on_release: root.go_chat()
+
+                    # Commands
+                    MDRaisedButton:
+                        text: "Comandos"
+                        size_hint_y: None
+                        height: dp(94)
+                        md_bg_color: 0.137, 0.129, 0.243, 0.6
+                        text_color: 1, 1, 1, 1
+                        line_color: 0.2, 0.2, 0.3, 0.4
+                        radius: [dp(16)]
+                        font_size: "14sp"
+                        on_release: root.go_commands()
+
+                    # Settings
+                    MDRaisedButton:
+                        text: "Configuracoes"
+                        size_hint_y: None
+                        height: dp(94)
+                        md_bg_color: 0.137, 0.129, 0.243, 0.6
+                        text_color: 1, 1, 1, 1
+                        line_color: 0.2, 0.2, 0.3, 0.4
+                        radius: [dp(16)]
+                        font_size: "14sp"
+                        on_release: root.go_settings()
+
+                # Bot info
+                BoxLayout:
+                    orientation: "vertical"
+                    size_hint_y: None
+                    height: dp(120)
+                    padding: dp(16)
+                    spacing: dp(8)
+                    md_bg_color: 0.137, 0.129, 0.243, 0.4
+                    radius: [dp(14)]
+
+                    Label:
+                        text: "Informacoes"
+                        font_size: "14sp"
+                        bold: True
+                        color: 0.914, 0.271, 0.376, 1
+                        size_hint_y: None
+                        height: dp(24)
+                        text_size: self.width, None
+                        halign: "left"
+
+                    Label:
+                        text: "Personalidade: " + root.bot_personality
+                        font_size: "12sp"
+                        color: 0.6, 0.6, 0.7, 1
+                        text_size: self.width, None
+                        halign: "left"
+
+                    Label:
+                        text: "Idioma: " + root.bot_language
+                        font_size: "12sp"
+                        color: 0.6, 0.6, 0.7, 1
+                        text_size: self.width, None
+                        halign: "left"
+
+                    Label:
+                        text: "Criado em: " + root.bot_created
+                        font_size: "12sp"
+                        color: 0.6, 0.6, 0.7, 1
+                        text_size: self.width, None
+                        halign: "left"
+
+                Widget:
+                    size_hint_y: None
+                    height: dp(20)
+"""
+)
 
 
-class BotPanelScreen(MDScreen):
-    """Painel de controle do bot."""
+class BotPanelScreen(Screen):
+    """Bot detail panel with status and quick actions."""
+
+    bot_name = StringProperty("Bot")
+    status_emoji = StringProperty("")
+    status_title = StringProperty("Carregando...")
+    status_desc = StringProperty("")
+    status_card_color = (0.137, 0.129, 0.243, 0.6)
+    bot_personality = StringProperty("-")
+    bot_language = StringProperty("pt-BR")
+    bot_created = StringProperty("-")
 
     def on_enter(self):
-        self.build_ui()
+        """Load bot data."""
+        app = App.get_running_app()
+        bot = getattr(app, "selected_bot", None)
+        if bot:
+            self._populate(bot)
+        else:
+            bot_id = getattr(app, "selected_bot_id", None)
+            if bot_id:
+                self._load_bot(bot_id)
 
-    def build_ui(self):
-        from app_cliente.main import ThemeColors
+    def _load_bot(self, bot_id):
+        """Load bot data from API."""
+        try:
+            app = App.get_running_app()
+            bot = app.api_client.get_bot(bot_id)
+            self._populate(bot)
+        except Exception:
+            pass
 
-        layout = MDBoxLayout(orientation="vertical", spacing=12, padding=16,
-                              md_bg_color=get_color_from_hex(ThemeColors.PRIMARY))
+    def _populate(self, bot):
+        """Populate UI with bot data."""
+        self.bot_name = bot.get("name", "Bot")
+        self.bot_personality = bot.get("personality", "friendly").capitalize()
+        self.bot_language = bot.get("language", "pt-BR")
+        created = bot.get("created_at", "")
+        if created and isinstance(created, str) and len(created) > 10:
+            self.bot_created = created[:10]
+        else:
+            self.bot_created = "-"
 
-        header = MDBoxLayout(size_hint_y=None, height=50, spacing=8)
-        header.add_widget(MDIconButton(icon="arrow-left", theme_text_color="Custom",
-                                        text_color=get_color_from_hex(ThemeColors.TEXT_PRIMARY),
-                                        on_release=lambda x: setattr(self.manager, "current", "home")))
-        header.add_widget(MDLabel(text="Meus Bots", font_style="H6", theme_text_color="Custom",
-                                   text_color=get_color_from_hex(ThemeColors.TEXT_PRIMARY)))
-        header.add_widget(MDBoxLayout(size_hint_x=0.3))
-        header.add_widget(MDIconButton(icon="plus", theme_text_color="Custom",
-                                        text_color=get_color_from_hex(ThemeColors.HIGHLIGHT),
-                                        on_release=lambda x: setattr(self.manager, "current", "bot_create")))
-        layout.add_widget(header)
+        status = bot.get("status", "disconnected")
+        if status == "connected":
+            self.status_emoji = ""
+            self.status_title = "Conectado"
+            self.status_desc = "Seu bot esta ativo e respondendo no WhatsApp"
+            self.status_card_color = (0.15, 0.35, 0.25, 0.8)
+        elif status == "connecting":
+            self.status_emoji = ""
+            self.status_title = "Conectando..."
+            self.status_desc = "Aguardando conexao com o WhatsApp"
+            self.status_card_color = (0.35, 0.3, 0.15, 0.8)
+        else:
+            self.status_emoji = ""
+            self.status_title = "Desconectado"
+            self.status_desc = "Conecte ao WhatsApp para comecar a usar"
+            self.status_card_color = (0.137, 0.129, 0.243, 0.6)
 
-        # Empty state
-        empty_card = MDCard(orientation="vertical", spacing=12, padding=32,
-                             md_bg_color=get_color_from_hex(ThemeColors.CARD), radius=[12], elevation=2)
-        empty_card.add_widget(MDLabel(text="🤖", font_style="H2", halign="center"))
-        empty_card.add_widget(MDLabel(text="Nenhum bot criado ainda", font_style="Subtitle1", halign="center",
-                                       theme_text_color="Custom", text_color=get_color_from_hex(ThemeColors.TEXT_PRIMARY)))
-        empty_card.add_widget(MDLabel(text="Crie seu primeiro chatbot WhatsApp!", font_style="Body2", halign="center",
-                                       theme_text_color="Custom", text_color=get_color_from_hex(ThemeColors.TEXT_SECONDARY)))
-        empty_card.add_widget(MDBoxLayout(size_hint_y=None, height=10))
-        empty_card.add_widget(
-            MDRaisedButton(text="CRIAR MEU PRIMEIRO BOT", size_hint=(0.8, None), height=44,
-                            md_bg_color=get_color_from_hex(ThemeColors.HIGHLIGHT),
-                            pos_hint={"center_x": 0.5},
-                            on_release=lambda x: setattr(self.manager, "current", "bot_create"))
-        )
-        layout.add_widget(empty_card)
+    def go_back(self):
+        self.manager.current = "home"
 
-        layout.add_widget(MDBoxLayout())
-        self.clear_widgets()
-        self.add_widget(layout)
+    def go_whatsapp(self):
+        self.manager.current = "whatsapp"
+
+    def go_chat(self):
+        self.manager.current = "chat"
+
+    def go_commands(self):
+        self.manager.current = "commands"
+
+    def go_settings(self):
+        self.manager.current = "settings"

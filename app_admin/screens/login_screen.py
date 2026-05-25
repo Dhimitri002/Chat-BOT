@@ -1,261 +1,228 @@
 """
-Login Screen for the Flora Admin Panel.
-Admin authentication with email and password.
+LoginScreen — Admin authentication screen.
+
+Features:
+  - Email & password fields
+  - Dark premium card centred on background
+  - Loading state + error feedback
+  - Keyboard shortcut (Enter) to submit
 """
-from kivy.properties import StringProperty, BooleanProperty
-from kivy.clock import Clock
+
+from kivy.animation import Animation
+from kivy.core.window import Window
 from kivy.metrics import dp
+from kivy.properties import StringProperty, BooleanProperty
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.card import MDCard
-from kivymd.uix.textfield import MDTextField
-from kivymd.uix.button import MDRaisedButton, MDIconButton
-from kivymd.uix.label import MDLabel
 from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.textfield import MDTextField
+from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDIconButton
+from kivymd.uix.label import MDLabel
 from kivymd.uix.spinner import MDSpinner
-from kivymd.uix.relativelayout import RelativeLayout
 
-from app_admin.services.auth import auth_service
-from app_admin.utils.constants import Colors
-from app_admin.utils.helpers import validate_email
+from app_admin.styles.theme import Colors, Theme
 
 
 class LoginScreen(MDScreen):
-    """Admin login screen with dark premium UI."""
+    """Email + password login for administrators."""
 
-    error_text = StringProperty("")
+    error_message = StringProperty("")
     loading = BooleanProperty(False)
 
-    def __init__(self, **kwargs):
+    def __init__(self, app: "FloraAdminApp", **kwargs):
         super().__init__(**kwargs)
-        self.name = "login"
-        self._build_ui()
+        self._app = app
+        self._build()
 
-    def _build_ui(self):
-        """Build the login screen UI."""
-        # Main layout
-        main_layout = MDBoxLayout(
+    # ── build UI ────────────────────────────────────────────────────────
+    def _build(self):
+        # Root layout — centre the card
+        root = MDBoxLayout(
             orientation="vertical",
-            padding=dp(40),
-            spacing=dp(16),
-            md_bg_color=Colors.BG_DARK,
+            md_bg_color=Colors.BG_BASE,
         )
 
-        # Center container
-        center_box = MDBoxLayout(
-            orientation="vertical",
-            size_hint=(None, None),
-            width=dp(400),
-            height=dp(500),
-            pos_hint={"center_x": 0.5, "center_y": 0.5},
-            spacing=dp(20),
+        spacer_top = MDBoxLayout(size_hint_y=0.2)
+        root.add_widget(spacer_top)
+
+        row = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=0.6,
+            padding=[Theme.SPACE_2XL, 0],
         )
 
-        # Spacer
-        main_layout.add_widget(MDBoxLayout(size_hint_y=0.15))
-
-        # Logo / Branding area
-        branding_box = MDBoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=dp(120),
-            spacing=dp(8),
-        )
-
-        # Logo icon
-        logo_btn = MDIconButton(
-            icon="robot",
-            icon_size=dp(64),
-            theme_icon_color="Custom",
-            icon_color=Colors.PRIMARY_LIGHT,
-            pos_hint={"center_x": 0.5},
-        )
-        branding_box.add_widget(logo_btn)
-
-        # App title
-        title_label = MDLabel(
-            text="Flora Admin",
-            halign="center",
-            font_style="H4",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_PRIMARY,
-            bold=True,
-        )
-        branding_box.add_widget(title_label)
-
-        # Subtitle
-        subtitle_label = MDLabel(
-            text="Painel Administrativo",
-            halign="center",
-            font_style="Subtitle1",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_SECONDARY,
-        )
-        branding_box.add_widget(subtitle_label)
-
-        center_box.add_widget(branding_box)
-
-        # Spacer
-        center_box.add_widget(MDBoxLayout(size_hint_y=None, height=dp(20)))
+        # Spacer left
+        row.add_widget(MDBoxLayout(size_hint_x=0.3))
 
         # Login card
-        login_card = MDCard(
+        self._card = MDCard(
             orientation="vertical",
-            padding=dp(24),
-            spacing=dp(16),
+            padding=Theme.SPACE_2XL,
+            spacing=Theme.SPACE_MD,
             md_bg_color=Colors.BG_CARD,
-            radius=[dp(16)],
-            elevation=dp(8),
+            radius=[Theme.RADIUS_XL],
+            elevation=Theme.ELEVATION_MODAL,
+            size_hint=(0.4, None),
+            height=dp(420),
+            pos_hint={"center_y": 0.5},
         )
+
+        # Logo / icon area
+        icon_box = MDBoxLayout(
+            size_hint_y=None,
+            height=dp(64),
+            padding=[0, Theme.SPACE_SM],
+        )
+        logo_icon = MDIconButton(
+            icon="flower",
+            theme_text_color="Custom",
+            text_color=Colors.PRIMARY,
+            font_size=dp(48),
+            size_hint=(None, None),
+            size=(dp(64), dp(64)),
+            pos_hint={"center_x": 0.5},
+        )
+        icon_box.add_widget(logo_icon)
+        self._card.add_widget(icon_box)
+
+        # Title
+        title = MDLabel(
+            text="Flora Admin",
+            font_style="H4",
+            bold=True,
+            halign="center",
+            theme_text_color="Custom",
+            text_color=Colors.TEXT_PRIMARY,
+            size_hint_y=None,
+            height=dp(40),
+        )
+        self._card.add_widget(title)
+
+        subtitle = MDLabel(
+            text="Painel Administrativo",
+            font_style="Caption",
+            halign="center",
+            theme_text_color="Custom",
+            text_color=Colors.TEXT_SECONDARY,
+            size_hint_y=None,
+            height=dp(20),
+        )
+        self._card.add_widget(subtitle)
+
+        # Spacer
+        self._card.add_widget(MDBoxLayout(size_hint_y=None, height=dp(16)))
 
         # Email field
-        self.email_field = MDTextField(
+        self._email_field = MDTextField(
             hint_text="Email",
             mode="round",
-            icon_left="account",
-            text="",
-            hint_text_color_normal=Colors.TEXT_HINT,
-            line_color_normal=Colors.BG_INPUT,
-            line_color_focus=Colors.PRIMARY_LIGHT,
-            icon_color_normal=Colors.TEXT_SECONDARY,
-            icon_color_focus=Colors.PRIMARY_LIGHT,
+            icon_left="email",
             text_color_normal=Colors.TEXT_PRIMARY,
             text_color_focus=Colors.TEXT_PRIMARY,
+            hint_text_color_normal=Colors.TEXT_HINT,
+            line_color_normal=Colors.BG_INPUT,
+            line_color_focus=Colors.PRIMARY,
             fill_color_normal=Colors.BG_INPUT,
-            radius=[dp(12)],
+            fill_color_focus=Colors.BG_INPUT,
+            radius=[Theme.RADIUS_MEDIUM],
         )
-        login_card.add_widget(self.email_field)
+        self._card.add_widget(self._email_field)
 
         # Password field
-        self.password_field = MDTextField(
+        self._password_field = MDTextField(
             hint_text="Senha",
             mode="round",
             icon_left="lock",
             password=True,
-            text="",
-            hint_text_color_normal=Colors.TEXT_HINT,
-            line_color_normal=Colors.BG_INPUT,
-            line_color_focus=Colors.PRIMARY_LIGHT,
-            icon_color_normal=Colors.TEXT_SECONDARY,
-            icon_color_focus=Colors.PRIMARY_LIGHT,
             text_color_normal=Colors.TEXT_PRIMARY,
             text_color_focus=Colors.TEXT_PRIMARY,
+            hint_text_color_normal=Colors.TEXT_HINT,
+            line_color_normal=Colors.BG_INPUT,
+            line_color_focus=Colors.PRIMARY,
             fill_color_normal=Colors.BG_INPUT,
-            radius=[dp(12)],
+            fill_color_focus=Colors.BG_INPUT,
+            radius=[Theme.RADIUS_MEDIUM],
         )
-        login_card.add_widget(self.password_field)
+        self._password_field.bind(on_text_validate=self._on_submit)
+        self._card.add_widget(self._password_field)
 
         # Error label
-        self.error_label = MDLabel(
+        self._error_label = MDLabel(
             text="",
-            halign="center",
             font_style="Caption",
+            halign="center",
             theme_text_color="Custom",
             text_color=Colors.ERROR,
             size_hint_y=None,
             height=dp(20),
         )
-        login_card.add_widget(self.error_label)
+        self._card.add_widget(self._error_label)
+        self.bind(error_message=lambda *a: setattr(self._error_label, "text", self.error_message))
 
         # Login button
-        self.login_button = MDRaisedButton(
-            text="ENTRAR",
-            size_hint=(1, None),
+        self._login_btn = MDRaisedButton(
+            text="Entrar",
+            size_hint_y=None,
             height=dp(48),
             md_bg_color=Colors.PRIMARY,
-            text_color=Colors.TEXT_PRIMARY,
+            text_color=Colors.BG_BASE,
             font_size=dp(16),
-            radius=[dp(12)],
-            on_release=self._on_login,
+            radius=[Theme.RADIUS_MEDIUM],
+            on_release=self._on_submit,
         )
-        login_card.add_widget(self.login_button)
+        self._card.add_widget(self._login_btn)
 
         # Loading spinner (hidden by default)
-        self.spinner_box = MDBoxLayout(
-            size_hint_y=None,
-            height=dp(0),
-        )
-        self.spinner = MDSpinner(
+        self._spinner = MDSpinner(
             size_hint=(None, None),
             size=(dp(32), dp(32)),
+            pos_hint={"center_x": 0.5},
             active=False,
-            color=Colors.PRIMARY_LIGHT,
         )
-        self.spinner_box.add_widget(self.spinner)
-        login_card.add_widget(self.spinner_box)
+        self._card.add_widget(self._spinner)
 
-        center_box.add_widget(login_card)
+        row.add_widget(self._card)
+        row.add_widget(MDBoxLayout(size_hint_x=0.3))
 
-        # Bottom spacer
-        main_layout.add_widget(center_box)
-        main_layout.add_widget(MDBoxLayout(size_hint_y=0.15))
+        root.add_widget(row)
+        root.add_widget(MDBoxLayout(size_hint_y=0.2))
 
-        # Version label
-        version_label = MDLabel(
-            text="Flora Platform v1.0.0",
-            halign="center",
-            font_style="Caption",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_HINT,
-            size_hint_y=None,
-            height=dp(20),
-        )
-        main_layout.add_widget(version_label)
+        self.add_widget(root)
 
-        self.add_widget(main_layout)
+        # Bind loading state
+        self.bind(loading=self._on_loading_changed)
 
-    def _on_login(self, *args):
-        """Handle login button press."""
-        email = self.email_field.text.strip()
-        password = self.password_field.text.strip()
+    # ── event handlers ───────────────────────────────────────────────────
+    def _on_loading_changed(self, *args):
+        self._login_btn.disabled = self.loading
+        self._login_btn.opacity = 0.4 if self.loading else 1
+        self._spinner.active = self.loading
 
-        # Validation
+    def _on_submit(self, *args):
+        email = (self._email_field.text or "").strip()
+        password = (self._password_field.text or "").strip()
+
         if not email:
-            self.error_label.text = "Digite seu email"
-            return
-        if not validate_email(email):
-            self.error_label.text = "Email invalido"
+            self.error_message = "Informe seu email."
             return
         if not password:
-            self.error_label.text = "Digite sua senha"
+            self.error_message = "Informe sua senha."
             return
 
-        self.error_label.text = ""
+        self.error_message = ""
         self.loading = True
-        self.login_button.disabled = True
-        self.login_button.text = "ENTRANDO..."
-        self.spinner_box.height = dp(40)
-        self.spinner.active = True
 
-        # Perform login
-        def _do_login(dt):
+        def _do_login():
             try:
-                success, message = auth_service.login(email, password)
-                self.loading = False
-                self.login_button.disabled = False
-                self.login_button.text = "ENTRAR"
-                self.spinner_box.height = dp(0)
-                self.spinner.active = False
-
+                success = self._app.login(email, password)
                 if success:
-                    self.error_label.text = ""
-                    self.manager.current = "dashboard"
+                    self._app.on_login_success()
                 else:
-                    self.error_label.text = message
+                    self.error_message = "Credenciais inválidas."
             except Exception as e:
+                self.error_message = f"Erro de conexão: {e}"
+            finally:
                 self.loading = False
-                self.login_button.disabled = False
-                self.login_button.text = "ENTRAR"
-                self.spinner_box.height = dp(0)
-                self.spinner.active = False
-                self.error_label.text = f"Erro: {str(e)}"
 
-        Clock.schedule_once(_do_login, 0.1)
-
-    def on_pre_enter(self):
-        """Called when screen is about to be entered."""
-        self.email_field.text = ""
-        self.password_field.text = ""
-        self.error_label.text = ""
-        self.loading = False
-        self.login_button.disabled = False
-        self.login_button.text = "ENTRAR"
+        import threading
+        threading.Thread(target=_do_login, daemon=True).start()

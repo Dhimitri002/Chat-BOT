@@ -1,146 +1,129 @@
-"""Auth Router - Endpoints de autenticação."""
-from datetime import timedelta
+"""Flora Platform — Authentication Endpoints"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_db
-from backend.config import settings
+from backend.api.deps import get_current_user, get_db
 from backend.models.user import User
 from backend.schemas.auth import (
     LoginRequest,
+    LoginResponse,
+    RefreshRequest,
     RegisterRequest,
-    TokenResponse,
+    UserResponse,
 )
-from backend.services.auth_service import (
-    create_access_token,
-    create_token_pair,
-    hash_password,
-    verify_password,
-)
+from backend.services.auth_service import AuthService
+from backend.core.security import create_access_token, create_refresh_token
 
-router = APIRouter()
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(request: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Login com email e senha. Retorna JWT token."""
-    # Buscar usuário pelo email
-    result = await db.execute(select(User).where(User.email == request.email))
-    user = result.scalar_one_or_none()
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    """Register a new user account."""
+    try:
+        user = await AuthService.register_user(
+            db=db,
+            name=body.name or "",
+            email=body.email,
+            password=body.password,
+        )
+        await db.commit()
+        return UserResponse(
+            id=str(user.id),
+            email=user.email,
+            name=user.name,
+            role=user.role,
+            is_active=user.is_active,
+            is_2fa_enabled=user.is_2fa_enabled,
+            created_at=user.created_at.isoformat(),
+        )
+    except ValueError as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Registration error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro ao registrar usuário",
+        )
 
-    if not user:
+
+@router.post("/login", response_model=LoginResponse)
+async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
+    """Authenticate and receive access + refresh tokens."""
+    result = await AuthService.login(db, body.email, body.password)
+    if not result:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email ou senha incorretos",
+            detail="Email ou senha inválidos",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-
-    if not verify_password(request.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email ou senha incorretos",
-        )
-
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Conta desativada. Contate o suporte.",
-        )
-
-    # Atualizar último login
-    user.last_login = datetime.utcnow()
-    await db.commit()
-
-    # Gerar tokens
-    tokens = create_token_pair(
-        user_id=str(user.id),
-        email=user.email,
-        role=user.role,
-    )
-
-    return TokenResponse(
-        access_token=tokens["access_token"],
-        token_type="bearer",
-        expires_in=tokens["expires_in"],
+    return LoginResponse(
+        access_token=result["access_token"],
+        refresh_token=result["refresh_token"],
+        token_type=result["token_type"],
+        expires_in=result["expires_in"],
+        user=result.get("user"),
     )
 
 
-@router.post("/register", response_model=TokenResponse)
-async def register(request: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    """Registrar novo usuário. Retorna JWT token."""
-    # Verificar se email já existe
-    result = await db.execute(select(User).where(User.email == request.email))
-    existing = result.scalar_one_or_none()
+@router.post("/refresh", response_model=LoginResponse)
+async def refresh_token(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
+    """Refresh an access token using a valid refresh token."""
+    from jose import jwt, JWTError
+    from backend.config import settings
 
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email já cadastrado",
+    try:
+        payload = jwt.decode(
+            body.refresh_token,
+            settings.SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
         )
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=400, detail="Token inválido")
+        user_id = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
 
-    # Criar novo usuário
-    new_user = User(
-        email=request.email,
-        hashed_password=hash_password(request.password),
-        full_name=request.full_name,
-        role="user",
-        is_active=True,
-        is_verified=False,
-    )
-
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-
-    # Gerar tokens
-    tokens = create_token_pair(
-        user_id=str(new_user.id),
-        email=new_user.email,
-        role=new_user.role,
-    )
-
-    return TokenResponse(
-        access_token=tokens["access_token"],
-        token_type="bearer",
-        expires_in=tokens["expires_in"],
-    )
-
-
-@router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db)):
-    """Renova access token usando refresh token."""
-    from backend.services.auth_service import decode_token
-
-    token_data = decode_token(refresh_token)
-    if not token_data or not token_data.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido ou expirado",
-        )
-
-    # Verificar se usuário ainda existe e está ativo
-    result = await db.execute(select(User).where(User.id == token_data.user_id))
-    user = result.scalar_one_or_none()
-
+    user = await AuthService.get_user_by_id(db, user_id)
     if not user or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Usuário não encontrado ou desativado",
-        )
+        raise HTTPException(status_code=401, detail="Usuário não encontrado ou inativo")
 
-    # Gerar novo par de tokens
-    tokens = create_token_pair(
-        user_id=str(user.id),
-        email=user.email,
-        role=user.role,
-    )
+    token_data = {"sub": str(user.id), "role": user.role}
+    new_access = create_access_token(token_data)
+    new_refresh = create_refresh_token(token_data)
 
-    return TokenResponse(
-        access_token=tokens["access_token"],
+    return LoginResponse(
+        access_token=new_access,
+        refresh_token=new_refresh,
         token_type="bearer",
-        expires_in=tokens["expires_in"],
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 
 
-from datetime import datetime  # noqa: E402
+@router.get("/me", response_model=UserResponse)
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Get current authenticated user profile."""
+    return UserResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        name=current_user.name,
+        role=current_user.role,
+        is_active=current_user.is_active,
+        is_2fa_enabled=current_user.is_2fa_enabled,
+        created_at=current_user.created_at.isoformat(),
+    )
+
+
+@router.post("/logout")
+async def logout(current_user: User = Depends(get_current_user)):
+    """Logout current user (client should discard tokens)."""
+    return {"success": True, "message": "Logout realizado com sucesso"}

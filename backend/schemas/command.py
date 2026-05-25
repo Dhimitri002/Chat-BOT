@@ -1,17 +1,15 @@
-"""
-Flora Platform — Command Schemas
-"""
+"""Command Schemas"""
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 
 
 class CommandCreate(BaseModel):
-    name: str = Field(..., min_length=2, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
     description: str = ""
-    trigger: str = Field(..., min_length=1, max_length=100)
+    trigger: str = Field(..., min_length=1, max_length=50)
     response: str = ""
-    response_type: str = "text"  # text, image, action
+    response_type: str = "text"
 
 
 class CommandUpdate(BaseModel):
@@ -32,20 +30,7 @@ class CommandResponse(BaseModel):
     response: str
     response_type: str
     is_active: bool
-    use_count: int
-    version: int
     created_at: datetime
 
     class Config:
         from_attributes = True
-
-
-class CommandTest(BaseModel):
-    message: str
-
-
-class CommandTestResult(BaseModel):
-    matched: bool
-    command_name: str = ""
-    trigger: str = ""
-    response: str = ""

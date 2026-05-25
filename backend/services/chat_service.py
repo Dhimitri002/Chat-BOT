@@ -185,7 +185,7 @@ class ChatService:
             llm_model_used=kwargs.get("llm_model_used", ""),
             llm_tokens_used=kwargs.get("llm_tokens_used", 0),
             llm_cost=kwargs.get("llm_cost", 0.0),
-            is_read="True" if direction == "outbound" else "False",
+            is_read=direction == "outbound",
             whatsapp_message_id=kwargs.get("whatsapp_message_id", ""),
             created_at=now,
         )

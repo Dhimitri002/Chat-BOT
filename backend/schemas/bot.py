@@ -5,25 +5,24 @@ from datetime import datetime
 
 
 class BotCreateRequest(BaseModel):
-    license_id: str
     name: str = Field(..., min_length=1, max_length=100)
-    prompt: str = Field(..., min_length=10)
+    description: str = ""
+    system_prompt: str = Field(default="", min_length=0)
     personality: str = "friendly"
-    tone: str = "warm"
     language: str = "pt-BR"
-    welcome_message: Optional[str] = None
-    farewell_message: Optional[str] = None
+    welcome_message: Optional[str] = "Olá! 👋 Como posso te ajudar?"
+    farewell_message: Optional[str] = "Até mais! 👋"
     away_message: Optional[str] = None
     preferred_llm: Optional[str] = None
     temperature: float = 0.7
-    max_tokens: int = 1024
+    max_tokens: int = 500
 
 
 class BotUpdateRequest(BaseModel):
     name: Optional[str] = None
-    prompt: Optional[str] = None
+    description: Optional[str] = None
+    system_prompt: Optional[str] = None
     personality: Optional[str] = None
-    tone: Optional[str] = None
     language: Optional[str] = None
     welcome_message: Optional[str] = None
     farewell_message: Optional[str] = None
@@ -36,21 +35,28 @@ class BotUpdateRequest(BaseModel):
 
 class BotResponse(BaseModel):
     id: str
-    license_id: str
     name: str
-    prompt: str
+    description: str
+    owner_id: str
+    whatsapp_session_id: Optional[str]
+    status: str
+    system_prompt: str
     personality: str
-    tone: str
     language: str
     welcome_message: Optional[str]
-    is_active: bool
-    is_connected: bool
-    preferred_llm: Optional[str]
-    temperature: float
-    max_tokens: int
-    version: int
+    farewell_message: Optional[str]
+    error_message: Optional[str]
+    command_prefix: str
+    llm_model: str
+    llm_provider: str
+    llm_temperature: float
+    llm_max_tokens: int
+    config: dict
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        from_attributes = True
 
 
 class ChatRequest(BaseModel):

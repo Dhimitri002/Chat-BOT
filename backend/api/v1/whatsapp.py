@@ -1,390 +1,610 @@
-"""WhatsApp Endpoints — API REST para gerenciamento de conexões WhatsApp."""
-from typing import Optional
+"""
+Flora Platform — WhatsApp API Endpoints
+========================================
+REST API for managing WhatsApp connections, sending messages,
+and monitoring session status.
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+All endpoints require authentication via JWT.
+Session-scoped endpoints check that the user owns the bot.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_current_user, get_db
-from backend.core.whatsapp_manager import WhatsAppManager
-from backend.models.bot import Bot
-from backend.models.user import User
-from backend.models.whatsapp_session import WhatsAppSession
-from backend.services.bot_service import BotService
-from backend.services.whatsapp_service import WhatsAppService
-from backend.config import settings
+from backend.api.deps import get_current_user, get_db, require_role
+from backend.services.whatsapp_service import (
+    WhatsAppService,
+    ConnectionState,
+    OutgoingMessage,
+)
+from backend.schemas.whatsapp import (
+    ConnectRequest,
+    ConnectResponse,
+    DisconnectRequest,
+    DisconnectResponse,
+    StatusResponse,
+    SendMessageRequest,
+    SendMessageResponse,
+    QrResponse,
+    RefreshQrResponse,
+    SessionsResponse,
+    SessionInfo,
+    HealthCheckResponse,
+)
 
-router = APIRouter()
+logger = logging.getLogger(__name__)
 
-# Instância global do WhatsApp Manager
-whatsapp_manager = WhatsAppManager()
-
-
-class SendMessageRequest(BaseModel):
-    to: str = Field(..., description="Número de destino (com código do país)")
-    message: str = Field(..., min_length=1, max_length=10000)
-
-
-class CreateSessionRequest(BaseModel):
-    bot_id: str = Field(..., description="ID do bot")
-
-
-# ─── Sessões WhatsApp ─────────────────────────────────────
-
-@router.get("/sessions")
-async def list_whatsapp_sessions(
-    bot_id: str = Query(...),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Lista sessões WhatsApp de um bot."""
-    bot = await BotService.get_bot(db, bot_id, str(current_user.id))
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot não encontrado")
-
-    sessions = await WhatsAppService.list_sessions(db, bot_id)
-    return {
-        "sessions": [
-            {
-                "id": str(s.id),
-                "bot_id": str(s.bot_id),
-                "session_name": s.session_name,
-                "status": s.status.value if hasattr(s.status, 'value') else str(s.status),
-                "phone_number": s.phone_number,
-                "phone_name": s.phone_name,
-                "connected_at": s.connected_at.isoformat() if s.connected_at else None,
-                "last_seen": s.last_seen.isoformat() if s.last_seen else None,
-                "reconnect_attempts": s.reconnect_attempts,
-            }
-            for s in sessions
-        ],
-        "total": len(sessions),
-    }
+router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 
 
-@router.post("/sessions")
-async def create_whatsapp_session(
-    request: CreateSessionRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Cria uma nova sessão WhatsApp."""
-    bot = await BotService.get_bot(db, request.bot_id, str(current_user.id))
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot não encontrado")
-
-    # Criar sessão no banco
-    session = await WhatsAppService.create_session(db, request.bot_id)
-
-    # Criar sessão no manager
-    ws_session = await whatsapp_manager.create_session(request.bot_id)
-
-    # Atualizar session_data com o ID do manager
-    session.session_data = {"manager_session_id": ws_session.session_id}
-    await db.commit()
-
-    return {
-        "id": str(session.id),
-        "bot_id": request.bot_id,
-        "status": "disconnected",
-        "message": "Sessão criada. Use /connect para gerar QR Code.",
-    }
+async def _get_whatsapp_service() -> WhatsAppService:
+    """Dependency to get the WhatsApp service singleton."""
+    return await WhatsAppService.get_instance()
 
 
-@router.get("/sessions/{session_id}")
-async def get_whatsapp_session(
-    session_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Obtém detalhes de uma sessão WhatsApp."""
-    session = await WhatsAppService.get_session(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+# ─── Connect ────────────────────────────────────────────────────────
 
-    return {
-        "id": str(session.id),
-        "bot_id": str(session.bot_id),
-        "session_name": session.session_name,
-        "status": session.status.value if hasattr(session.status, 'value') else str(session.status),
-        "phone_number": session.phone_number,
-        "phone_name": session.phone_name,
-        "qr_code": session.qr_code if not session.qr_expires_at or session.qr_expires_at else None,
-        "connected_at": session.connected_at.isoformat() if session.connected_at else None,
-        "last_seen": session.last_seen.isoformat() if session.last_seen else None,
-    }
-
-
-@router.post("/sessions/{session_id}/connect")
+@router.post(
+    "/connect",
+    response_model=ConnectResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Connect a WhatsApp session",
+    description="Creates a new WhatsApp connection for the specified bot. Returns a QR code to scan if authentication is needed, or connects immediately if a session already exists.",
+)
 async def connect_whatsapp(
-    session_id: str,
-    current_user: User = Depends(get_current_user),
+    request: ConnectRequest,
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
 ):
-    """Inicia conexão WhatsApp (gera QR Code)."""
-    session = await WhatsAppService.get_session(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+    """
+    Connect a bot to WhatsApp.
 
-    # Verificar se já está conectado
-    status_val = session.status.value if hasattr(session.status, 'value') else str(session.status)
-    if status_val == "connected":
-        return {"message": "WhatsApp já está conectado", "status": "connected"}
+    Flow:
+    1. Validates the bot exists and belongs to the current user (or user is admin)
+    2. Creates or restores a WhatsApp session
+    3. Returns QR code for scanning, or status if already connected
+    """
+    # Verify bot ownership
+    from sqlalchemy import select
+    from backend.models import Bot
 
-    # Iniciar conexão
-    try:
-        # Buscar manager session ID
-        manager_session_id = None
-        if session.session_data and isinstance(session.session_data, dict):
-            manager_session_id = session.session_data.get("manager_session_id")
+    result = await db.execute(select(Bot).where(Bot.id == request.bot_id))
+    bot = result.scalar_one_or_none()
 
-        if manager_session_id:
-            ws_session = await whatsapp_manager.get_session(manager_session_id)
-        else:
-            ws_session = await whatsapp_manager.create_session(str(session.bot_id))
-            session.session_data = {"manager_session_id": ws_session.session_id}
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
 
-        result = await whatsapp_manager.connect(ws_session.session_id)
+    if str(bot.owner_id) != str(current_user.id):
+        # Allow admins to connect any bot
+        await require_role("admin")(current_user)
 
-        # Atualizar banco
-        await WhatsAppService.update_status(
-            db, session_id,
-            __import__('backend.models.whatsapp_session', fromlist=['SessionStatus']).SessionStatus.QR_REQUIRED,
+    # Check rate limit: max 3 active sessions per user
+    user_sessions = [
+        s for s in wa_service.list_sessions()
+        if s.state in (ConnectionState.CONNECTED, ConnectionState.QR_WAITING, ConnectionState.CONNECTING)
+    ]
+    if len(user_sessions) >= 3:
+        raise HTTPException(
+            status_code=429,
+            detail="Maximum active sessions limit reached (3). Disconnect an existing session first.",
         )
 
-        if result.get("qr_code"):
-            from datetime import datetime, timedelta
-            await WhatsAppService.update_qr(
-                db, session_id,
-                result["qr_code"],
-                expires_in_seconds=60,
+    try:
+        qr_data = await wa_service.connect(
+            bot_id=request.bot_id,
+            session_id=request.session_id,
+            phone_number=request.phone_number,
+            webhook_url=request.webhook_url,
+        )
+
+        if qr_data:
+            # QR code generated - user needs to scan
+            return ConnectResponse(
+                success=True,
+                session_id=qr_data.session_id,
+                state=ConnectionState.QR_WAITING,
+                qr_code=qr_data.qr_code,
+                qr_expires_at=qr_data.expires_at,
+                message="Scan the QR code with your WhatsApp app to connect.",
             )
 
-        return {
-            "status": "qr_required",
-            "qr_code": result.get("qr_code"),
-            "expires_at": result.get("expires_at"),
-        }
+        # Session was restored/connected immediately
+        conn = wa_service.get_connection_by_bot(request.bot_id)
+        if conn and conn.state == ConnectionState.CONNECTED:
+            return ConnectResponse(
+                success=True,
+                session_id=conn.session_id,
+                state=ConnectionState.CONNECTED,
+                message="Session restored and connected.",
+            )
 
+        # Fallback - should not reach here
+        raise HTTPException(status_code=500, detail="Unexpected connection state")
+
+    except ConnectionError as e:
+        logger.error("Connection error for bot %s: %s", request.bot_id, e)
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao conectar: {str(e)}")
+        logger.exception("Unexpected error connecting bot %s: %s", request.bot_id, e)
+        raise HTTPException(status_code=500, detail="Internal connection error")
 
 
-@router.get("/sessions/{session_id}/qr")
+# ─── Disconnect ─────────────────────────────────────────────────────
+
+@router.post(
+    "/disconnect",
+    response_model=DisconnectResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Disconnect a WhatsApp session",
+)
+async def disconnect_whatsapp(
+    request: DisconnectRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """
+    Disconnect a WhatsApp session.
+
+    If session_id is provided, disconnects that specific session.
+    If bot_id is provided, disconnects the bot's active session.
+    Optionally removes stored session data (remove_data=true).
+    """
+    session_id = request.session_id
+
+    # If bot_id provided, look up the session
+    if not session_id and request.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+
+        result = await db.execute(select(Bot).where(Bot.id == request.bot_id))
+        bot = result.scalar_one_or_none()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found")
+        if str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
+
+        conn = wa_service.get_connection_by_bot(request.bot_id)
+        if conn:
+            session_id = conn.session_id
+
+    if not session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either session_id or bot_id",
+        )
+
+    conn = wa_service.get_connection(session_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership via bot
+    if conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
+
+    try:
+        disconnected = await wa_service.disconnect(session_id)
+        if not disconnected:
+            raise HTTPException(status_code=404, detail="Session not active")
+
+        # Optionally remove stored data
+        if request.remove_data:
+            store = wa_service._store
+            store.delete_session(session_id)
+
+        return DisconnectResponse(
+            success=True,
+            session_id=session_id,
+            message="Session disconnected successfully.",
+        )
+    except Exception as e:
+        logger.exception("Error disconnecting session %s: %s", session_id, e)
+        raise HTTPException(status_code=500, detail="Error disconnecting session")
+
+
+# ─── Status ─────────────────────────────────────────────────────────
+
+@router.get(
+    "/status/{session_id}",
+    response_model=StatusResponse,
+    summary="Get connection status",
+)
+async def get_session_status(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """Get the full connection status of a WhatsApp session."""
+    conn = wa_service.get_connection(session_id)
+    if not conn:
+        # Check if session has stored auth data
+        stored = wa_service.list_stored_sessions()
+        if session_id in stored:
+            return StatusResponse(
+                session_id=session_id,
+                state=ConnectionState.DISCONNECTED,
+                message="Session exists but is not currently active.",
+            )
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership
+    if conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
+
+    status_data = conn.status
+    is_healthy = status_data.state == ConnectionState.CONNECTED
+    is_qr_valid = (
+        status_data.state == ConnectionState.QR_WAITING
+        and status_data.qr_code is not None
+        and status_data.qr_code != "expired"
+    )
+
+    return StatusResponse(
+        session_id=status_data.session_id,
+        bot_id=status_data.bot_id,
+        state=status_data.state,
+        phone_number=status_data.phone_number,
+        push_name=status_data.push_name,
+        battery_level=status_data.battery_level,
+        plugged_in=status_data.plugged_in,
+        connected_at=status_data.connected_at,
+        last_seen=status_data.last_seen,
+        retry_count=status_data.retry_count,
+        qr_code=status_data.qr_code,
+        is_healthy=is_healthy,
+        is_qr_valid=is_qr_valid,
+        message=_state_message(status_data.state),
+    )
+
+
+@router.get(
+    "/status/bot/{bot_id}",
+    response_model=StatusResponse,
+    summary="Get connection status by bot ID",
+)
+async def get_bot_status(
+    bot_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """Get the connection status for a bot's active WhatsApp session."""
+    from sqlalchemy import select
+    from backend.models import Bot
+
+    result = await db.execute(select(Bot).where(Bot.id == bot_id))
+    bot = result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    if str(bot.owner_id) != str(current_user.id):
+        await require_role("admin")(current_user)
+
+    conn = wa_service.get_connection_by_bot(bot_id)
+    if not conn:
+        # Check stored sessions
+        stored = wa_service.list_stored_sessions()
+        # Check if any stored session belongs to this bot
+        for sid in stored:
+            meta = wa_service._store.load_metadata(sid)
+            if meta and meta.get("bot_id") == bot_id:
+                return StatusResponse(
+                    session_id=sid,
+                    bot_id=bot_id,
+                    state=ConnectionState.DISCONNECTED,
+                    message="Session exists but is not currently active.",
+                )
+        raise HTTPException(
+            status_code=404,
+            detail="No WhatsApp session found for this bot. Connect first.",
+        )
+
+    status_data = conn.status
+    is_healthy = status_data.state == ConnectionState.CONNECTED
+    is_qr_valid = (
+        status_data.state == ConnectionState.QR_WAITING
+        and status_data.qr_code is not None
+        and status_data.qr_code != "expired"
+    )
+
+    return StatusResponse(
+        session_id=status_data.session_id,
+        bot_id=status_data.bot_id,
+        state=status_data.state,
+        phone_number=status_data.phone_number,
+        push_name=status_data.push_name,
+        battery_level=status_data.battery_level,
+        plugged_in=status_data.plugged_in,
+        connected_at=status_data.connected_at,
+        last_seen=status_data.last_seen,
+        retry_count=status_data.retry_count,
+        qr_code=status_data.qr_code,
+        is_healthy=is_healthy,
+        is_qr_valid=is_qr_valid,
+        message=_state_message(status_data.state),
+    )
+
+
+def _state_message(state: ConnectionState) -> str:
+    """Return a human-readable message for the connection state."""
+    messages = {
+        ConnectionState.DISCONNECTED: "Session is disconnected.",
+        ConnectionState.CONNECTING: "Session is connecting...",
+        ConnectionState.QR_WAITING: "Waiting for QR code to be scanned.",
+        ConnectionState.CONNECTED: "Session is connected and active.",
+        ConnectionState.RECONNECTING: "Session is reconnecting...",
+        ConnectionState.LOGGED_OUT: "Session was logged out. Scan QR again.",
+        ConnectionState.ERROR: "Session encountered an error.",
+    }
+    return messages.get(state, f"Unknown state: {state}")
+
+
+# ─── Send Message ───────────────────────────────────────────────────
+
+@router.post(
+    "/send",
+    response_model=SendMessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Send a WhatsApp message",
+)
+async def send_message(
+    request: SendMessageRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """
+    Send a message through a WhatsApp session.
+
+    Supports text, media (image/video/audio/document), and button messages.
+    The 'to' field should be a phone number in international format (digits only, no +).
+    """
+    # Verify session ownership
+    conn = wa_service.get_connection(request.session_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
+
+    # Build outgoing message
+    msg = OutgoingMessage(
+        to=request.to,
+        text=request.text,
+        media_url=request.media_url,
+        media_type=request.media_type,
+        media_caption=request.media_caption,
+        media_filename=request.media_filename,
+        buttons=request.buttons,
+        reply_to=request.reply_to,
+    )
+
+    result = await wa_service.send_message(request.session_id, msg)
+
+    if result.success:
+        return SendMessageResponse(
+            success=True,
+            message_id=result.message_id,
+            timestamp=result.timestamp,
+            message="Message sent successfully.",
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=result.error or "Failed to send message",
+        )
+
+
+# ─── QR Code ────────────────────────────────────────────────────────
+
+@router.get(
+    "/qr/{session_id}",
+    response_model=QrResponse,
+    summary="Get current QR code",
+)
 async def get_qr_code(
     session_id: str,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
 ):
-    """Obtém QR Code de uma sessão."""
-    session = await WhatsAppService.get_session(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+    """Get the current QR code for a session (if in QR_WAITING state)."""
+    conn = wa_service.get_connection(session_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    # Verificar se QR expirou
-    from datetime import datetime
-    if session.qr_expires_at and session.qr_expires_at < datetime.utcnow():
-        # Regenerar
-        try:
-            manager_session_id = None
-            if session.session_data and isinstance(session.session_data, dict):
-                manager_session_id = session.session_data.get("manager_session_id")
+    # Verify ownership
+    if conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
 
-            if manager_session_id:
-                ws_session = await whatsapp_manager.get_session(manager_session_id)
-                if ws_session:
-                    result = await whatsapp_manager.connect(ws_session.session_id)
-                    return {
-                        "qr_code": result.get("qr_code"),
-                        "expires_at": result.get("expires_at"),
-                    }
-        except Exception:
-            pass
+    if conn.state != ConnectionState.QR_WAITING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Session is not in QR_WAITING state (current: {conn.state})",
+        )
 
-        raise HTTPException(status_code=400, detail="QR Code expirou. Gere um novo.")
+    try:
+        qr_data = conn.generate_qr()
+        return QrResponse(
+            session_id=session_id,
+            qr_code=qr_data.qr_code,
+            qr_string=qr_data.qr_string,
+            expires_at=qr_data.expires_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=410, detail=str(e))
 
-    return {
-        "qr_code": session.qr_code,
-        "expires_at": session.qr_expires_at.isoformat() if session.qr_expires_at else None,
-    }
 
-
-@router.post("/sessions/{session_id}/disconnect")
-async def disconnect_whatsapp(
+@router.post(
+    "/qr/{session_id}/refresh",
+    response_model=RefreshQrResponse,
+    summary="Refresh QR code",
+)
+async def refresh_qr_code(
     session_id: str,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
 ):
-    """Desconecta uma sessão WhatsApp."""
-    session = await WhatsAppService.get_session(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+    """Request a fresh QR code for a session."""
+    conn = wa_service.get_connection(session_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    # Desconectar no manager
-    try:
-        manager_session_id = None
-        if session.session_data and isinstance(session.session_data, dict):
-            manager_session_id = session.session_data.get("manager_session_id")
-
-        if manager_session_id:
-            ws_session = await whatsapp_manager.get_session(manager_session_id)
-            if ws_session:
-                await whatsapp_manager.disconnect(ws_session.session_id)
-    except Exception:
-        pass
-
-    # Atualizar banco
-    await WhatsAppService.disconnect_session(db, session_id)
-
-    return {"message": "WhatsApp desconectado", "status": "disconnected"}
-
-
-@router.delete("/sessions/{session_id}")
-async def delete_whatsapp_session(
-    session_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Deleta uma sessão WhatsApp."""
-    session = await WhatsAppService.get_session(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
-
-    # Desconectar primeiro
-    try:
-        manager_session_id = None
-        if session.session_data and isinstance(session.session_data, dict):
-            manager_session_id = session.session_data.get("manager_session_id")
-
-        if manager_session_id:
-            await whatsapp_manager.delete_session(manager_session_id)
-    except Exception:
-        pass
-
-    # Deletar do banco
-    await WhatsAppService.delete_session(db, session_id)
-
-    return {"message": "Sessão deletada"}
-
-
-# ─── Envio de Mensagens ──────────────────────────────────
-
-@router.post("/send")
-async def send_whatsapp_message(
-    session_id: str = Query(...),
-    request: SendMessageRequest = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Envia mensagem pelo WhatsApp."""
-    session = await WhatsAppService.get_session(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
-
-    status_val = session.status.value if hasattr(session.status, 'value') else str(session.status)
-    if status_val != "connected":
-        raise HTTPException(status_code=400, detail="WhatsApp não está conectado")
+    # Verify ownership
+    if conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
 
     try:
-        manager_session_id = None
-        if session.session_data and isinstance(session.session_data, dict):
-            manager_session_id = session.session_data.get("manager_session_id")
-
-        if manager_session_id:
-            ws_session = await whatsapp_manager.get_session(manager_session_id)
-            if ws_session:
-                result = await whatsapp_manager.send_message(
-                    ws_session.session_id,
-                    request.to,
-                    request.message,
-                )
-                return result
-
-        raise HTTPException(status_code=500, detail="Erro ao enviar mensagem")
-
+        qr_data = await wa_service.refresh_qr(session_id)
+        return RefreshQrResponse(
+            session_id=session_id,
+            qr_code=qr_data.qr_code,
+            qr_string=qr_data.qr_string,
+            expires_at=qr_data.expires_at,
+            message="New QR code generated. Scan with your WhatsApp app.",
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao enviar: {str(e)}")
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
-# ─── Webhook (chamado pelo connector) ────────────────────
+# ─── Sessions Listing ───────────────────────────────────────────────
 
-@router.post("/webhook")
-async def whatsapp_webhook(
-    payload: dict,
+@router.get(
+    "/sessions",
+    response_model=SessionsResponse,
+    summary="List all active sessions",
+)
+async def list_sessions(
     db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
 ):
-    """Recebe webhooks do WhatsApp connector."""
-    result = await whatsapp_manager.handle_webhook(payload)
+    """
+    List all active WhatsApp sessions.
 
-    # Processar eventos
-    event_type = payload.get("event")
+    Admins see all sessions. Regular users see only their own.
+    """
+    is_admin = current_user.role == "admin"
+    active_sessions = wa_service.list_sessions()
+    stored_sessions = wa_service.list_stored_sessions()
 
-    if event_type == "connected":
-        session_id = payload.get("session_id")
-        data = payload.get("data", {})
-        # Atualizar todas as sessões que usam este manager_session_id
-        sessions_result = await db.execute(
-            select(WhatsAppSession).where(
-                WhatsAppSession.session_data.contains({"manager_session_id": session_id})
-            )
-        )
-        for s in sessions_result.scalars().all():
-            await WhatsAppService.update_status(
-                db, str(s.id),
-                __import__('backend.models.whatsapp_session', fromlist=['SessionStatus']).SessionStatus.CONNECTED,
-                phone_number=data.get("phone_number"),
-                phone_name=data.get("phone_name"),
-            )
+    session_infos = []
+    for s in active_sessions:
+        # Filter by ownership for non-admins
+        if not is_admin and s.bot_id:
+            from sqlalchemy import select
+            from backend.models import Bot
+            result = await db.execute(select(Bot).where(Bot.id == s.bot_id))
+            bot = result.scalar_one_or_none()
+            if bot and str(bot.owner_id) != str(current_user.id):
+                continue
 
-    elif event_type == "disconnected":
-        session_id = payload.get("session_id")
-        sessions_result = await db.execute(
-            select(WhatsAppSession).where(
-                WhatsAppSession.session_data.contains({"manager_session_id": session_id})
-            )
-        )
-        for s in sessions_result.scalars().all():
-            await WhatsAppService.disconnect_session(db, str(s.id))
+        session_infos.append(SessionInfo(
+            session_id=s.session_id,
+            bot_id=s.bot_id,
+            state=s.state,
+            phone_number=s.phone_number,
+            push_name=s.push_name,
+            connected_at=s.connected_at,
+            last_seen=s.last_seen,
+        ))
 
-    return result
+    # Include stored but inactive sessions
+    active_ids = {s.session_id for s in active_sessions}
+    for sid in stored_sessions:
+        if sid not in active_ids:
+            meta = wa_service._store.load_metadata(sid)
+            if meta:
+                if not is_admin and meta.get("bot_id"):
+                    from sqlalchemy import select
+                    from backend.models import Bot
+                    result = await db.execute(
+                        select(Bot).where(Bot.id == meta["bot_id"])
+                    )
+                    bot = result.scalar_one_or_none()
+                    if bot and str(bot.owner_id) != str(current_user.id):
+                        continue
+
+                session_infos.append(SessionInfo(
+                    session_id=sid,
+                    bot_id=meta.get("bot_id", ""),
+                    state=ConnectionState.DISCONNECTED,
+                    phone_number=meta.get("phone_number"),
+                    push_name=meta.get("push_name"),
+                ))
+
+    return SessionsResponse(
+        sessions=session_infos,
+        total=len(session_infos),
+    )
 
 
-# ─── Status ───────────────────────────────────────────────
+# ─── Health Check ───────────────────────────────────────────────────
 
-@router.get("/sessions/{session_id}/status")
-async def get_whatsapp_status(
-    session_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+@router.get(
+    "/health",
+    response_model=HealthCheckResponse,
+    summary="WhatsApp service health check",
+)
+async def whatsapp_health(
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
 ):
-    """Obtém status de uma sessão WhatsApp."""
-    session = await WhatsAppService.get_session(db, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+    """Check if the WhatsApp service is running and healthy."""
+    sessions = wa_service.list_sessions()
+    active_count = sum(
+        1 for s in sessions
+        if s.state == ConnectionState.CONNECTED
+    )
+    qr_count = sum(
+        1 for s in sessions
+        if s.state == ConnectionState.QR_WAITING
+    )
+    error_count = sum(
+        1 for s in sessions
+        if s.state == ConnectionState.ERROR
+    )
 
-    status_val = session.status.value if hasattr(session.status, 'value') else str(session.status)
-
-    # Verificar se processo ainda está ativo
-    manager_session_id = None
-    if session.session_data and isinstance(session.session_data, dict):
-        manager_session_id = session.session_data.get("manager_session_id")
-
-    if manager_session_id:
-        try:
-            ws_check = await whatsapp_manager.check_connection(manager_session_id)
-            if ws_check.get("status") == "connected":
-                status_val = "connected"
-        except Exception:
-            pass
-
-    return {
-        "session_id": session_id,
-        "status": status_val,
-        "phone_number": session.phone_number,
-        "phone_name": session.phone_name,
-        "connected_at": session.connected_at.isoformat() if session.connected_at else None,
-        "last_seen": session.last_seen.isoformat() if session.last_seen else None,
-    }
+    return HealthCheckResponse(
+        status="healthy" if active_count > 0 or len(sessions) == 0 else "degraded",
+        active_sessions=active_count,
+        qr_waiting=qr_count,
+        errors=error_count,
+        total_sessions=len(sessions),
+        timestamp=datetime.now(timezone.utc),
+    )

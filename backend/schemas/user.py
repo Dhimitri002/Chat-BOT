@@ -9,11 +9,11 @@ from datetime import datetime
 class UserCreate(BaseModel):
     email: str = Field(..., min_length=5, max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
-    full_name: str = Field(..., min_length=2, max_length=255)
+    name: str = Field(..., min_length=2, max_length=255)
 
 
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = Field(None, min_length=2, max_length=255)
+    name: Optional[str] = Field(None, min_length=2, max_length=255)
     email: Optional[str] = Field(None, min_length=5, max_length=255)
     avatar_url: Optional[str] = None
     is_2fa_enabled: Optional[bool] = None
@@ -22,7 +22,7 @@ class UserUpdate(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: str
-    full_name: str
+    name: str
     role: str
     is_active: bool
     is_2fa_enabled: bool
@@ -37,7 +37,7 @@ class UserResponse(BaseModel):
 class UserProfile(BaseModel):
     id: str
     email: str
-    full_name: str
+    name: str
     role: str
     is_active: bool
     avatar_url: str
@@ -50,3 +50,9 @@ class UserProfile(BaseModel):
 class ChangePassword(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class UserMinimal(BaseModel):
+    id: str
+    name: str
+    email: str

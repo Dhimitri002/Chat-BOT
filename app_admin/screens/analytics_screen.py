@@ -1,531 +1,296 @@
 """
-Analytics Screen for the Flora Admin Panel.
-Analytics with charts, statistics, and date range filters.
+AnalyticsScreen — Admin analytics with charts and data tables.
+
+Fetches from:
+  - GET /api/v1/analytics/dashboard      (user-scoped)
+  - GET /api/v1/analytics/llm-usage
 """
-from kivy.clock import Clock
+
 from kivy.metrics import dp
-from kivy.properties import StringProperty
+from kivy.clock import Clock
 from kivymd.uix.screen import MDScreen
+from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDRaisedButton, MDIconButton, MDFlatButton
-from kivymd.uix.textfield import MDTextField
+from kivymd.uix.button import MDRaisedButton, MDIconButton
 from kivymd.uix.spinner import MDSpinner
 from kivymd.uix.scrollview import MDScrollView
-from kivymd.uix.gridlayout import MDGridLayout
 
-from app_admin.services.api_client import api_client
-from app_admin.utils.constants import Colors
-from app_admin.utils.helpers import format_currency, format_number, format_datetime
+from app_admin.styles.theme import Colors, Theme
 
 
-class AnalyticsCard(MDCard):
-    """A card displaying an analytics metric."""
+def _make_chart_card(title: str, data_pairs: list[tuple[str, int]], accent_color) -> MDCard:
+    """Build a simple bar-chart card from (label, value) pairs."""
+    card = MDCard(
+        orientation="vertical",
+        padding=Theme.SPACE_LG,
+        spacing=Theme.SPACE_SM,
+        md_bg_color=Colors.BG_CARD,
+        radius=[Theme.RADIUS_LARGE],
+        elevation=Theme.ELEVATION_LOW,
+        size_hint_y=None,
+    )
 
-    def __init__(self, title="", value="", subtitle="", icon="", color=None, **kwargs):
-        super().__init__(
-            orientation="vertical",
-            padding=dp(16),
-            spacing=dp(4),
-            md_bg_color=Colors.BG_CARD,
-            radius=[dp(12)],
-            elevation=dp(4),
-            size_hint_y=None,
-            height=dp(100),
-            **kwargs,
-        )
+    card.add_widget(MDLabel(
+        text=title,
+        font_style="H6",
+        bold=True,
+        theme_text_color="Custom",
+        text_color=Colors.TEXT_PRIMARY,
+        size_hint_y=None,
+        height=dp(32),
+    ))
 
-        # Header
-        header = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(28),
-            spacing=dp(8),
-        )
-
-        if icon:
-            icon_btn = MDIconButton(
-                icon=icon,
-                icon_size=dp(20),
-                theme_icon_color="Custom",
-                icon_color=color or Colors.PRIMARY_LIGHT,
-                size_hint_x=None,
-                width=dp(32),
-            )
-            header.add_widget(icon_btn)
-
-        title_label = MDLabel(
-            text=title,
-            font_style="Caption",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_SECONDARY,
-            valign="center",
-        )
-        header.add_widget(title_label)
-        self.add_widget(header)
-
-        # Value
-        value_label = MDLabel(
-            text=str(value),
-            font_style="H4",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_PRIMARY,
-            bold=True,
-        )
-        self.add_widget(value_label)
-
-        # Subtitle
-        if subtitle:
-            sub_label = MDLabel(
-                text=subtitle,
-                font_style="Caption",
-                theme_text_color="Custom",
-                text_color=Colors.TEXT_HINT,
-                size_hint_y=None,
-                height=dp(16),
-            )
-            self.add_widget(sub_label)
-
-
-class ChartPlaceholder(MDCard):
-    """A placeholder for charts."""
-
-    def __init__(self, title="", description="", icon="chart-line", **kwargs):
-        super().__init__(
-            orientation="vertical",
-            padding=dp(16),
-            spacing=dp(8),
-            md_bg_color=Colors.BG_CARD,
-            radius=[dp(12)],
-            elevation=dp(4),
-            size_hint_y=None,
-            height=dp(250),
-            **kwargs,
-        )
-
-        # Title
-        title_label = MDLabel(
-            text=f"[b]{title}[/b]",
-            markup=True,
-            font_style="H6",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_PRIMARY,
-            size_hint_y=None,
-            height=dp(28),
-        )
-        self.add_widget(title_label)
-
-        # Chart area
-        chart_area = MDBoxLayout(
-            orientation="vertical",
-            padding=dp(20),
-        )
-
-        chart_icon = MDIconButton(
-            icon=icon,
-            icon_size=dp(48),
-            theme_icon_color="Custom",
-            icon_color=Colors.PRIMARY_LIGHT,
-            pos_hint={"center_x": 0.5},
-            disabled=True,
-        )
-        chart_area.add_widget(chart_icon)
-
-        desc_label = MDLabel(
-            text=description,
-            halign="center",
+    if not data_pairs:
+        card.add_widget(MDLabel(
+            text="Sem dados.",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=Colors.TEXT_HINT,
-        )
-        chart_area.add_widget(desc_label)
-
-        # Simulated bar chart with colored bars
-        bars_row = MDBoxLayout(
-            orientation="horizontal",
-            spacing=dp(4),
             size_hint_y=None,
-            height=dp(60),
-            padding=[dp(20), 0],
+            height=dp(30),
+        ))
+        card.height = dp(100)
+        return card
+
+    max_val = max(v for _, v in data_pairs) if data_pairs else 1
+    if max_val == 0:
+        max_val = 1
+
+    bars_container = MDBoxLayout(
+        orientation="vertical",
+        spacing=dp(4),
+        size_hint_y=None,
+    )
+    for lbl, val in data_pairs:
+        bar_row = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(28),
+            spacing=dp(8),
         )
+        bar_row.add_widget(MDLabel(
+            text=lbl,
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=Colors.TEXT_SECONDARY,
+            size_hint_x=None,
+            width=dp(80),
+            shorten=True,
+        ))
 
-        bar_colors = Colors.CHART_COLORS
-        bar_heights = [0.6, 0.8, 0.4, 0.9, 0.7, 0.5, 0.85]
+        # Bar background
+        bar_bg = MDBoxLayout(
+            size_hint_x=0.7,
+            md_bg_color=(*Colors.BG_INPUT[:3], 1),
+            radius=[dp(4)],
+        )
+        fill_ratio = val / max_val
+        bar_fill = MDBoxLayout(
+            size_hint_x=fill_ratio,
+            md_bg_color=(*accent_color[:3], 0.7),
+            radius=[dp(4)],
+        )
+        bar_bg.add_widget(bar_fill)
+        bar_bg.add_widget(MDBoxLayout())  # spacer remaining
+        bar_row.add_widget(bar_bg)
 
-        for i, (bh, bc) in enumerate(zip(bar_heights, bar_colors)):
-            bar_container = MDBoxLayout(
-                orientation="vertical",
-                size_hint_x=1 / len(bar_heights),
-            )
-            bar_container.add_widget(MDBoxLayout(size_hint_y=1 - bh))
-            bar = MDBoxLayout(
-                md_bg_color=bc,
-                radius=[dp(2), dp(2), 0, 0],
-            )
-            bar_container.add_widget(bar)
-            bars_row.add_widget(bar_container)
+        bar_row.add_widget(MDLabel(
+            text=str(val),
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=Colors.TEXT_PRIMARY,
+            size_hint_x=None,
+            width=dp(40),
+            halign="right",
+        ))
+        bars_container.add_widget(bar_row)
 
-        chart_area.add_widget(bars_row)
-        self.add_widget(chart_area)
+    bars_container.height = len(data_pairs) * dp(28)
+    card.add_widget(bars_container)
+    card.height = dp(80) + bars_container.height
+
+    return card
 
 
 class AnalyticsScreen(MDScreen):
-    """Analytics screen with charts and statistics."""
+    """Analytics dashboard with charts and summary cards."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, app: "FloraAdminApp", **kwargs):
         super().__init__(**kwargs)
-        self.name = "analytics"
-        self._build_ui()
+        self._app = app
+        self._build()
 
-    def _build_ui(self):
-        """Build the analytics screen UI."""
-        main_layout = MDBoxLayout(
+    # ── build UI ────────────────────────────────────────────────────────
+    def _build(self):
+        root = MDBoxLayout(
             orientation="vertical",
-            md_bg_color=Colors.BG_DARK,
+            padding=Theme.SPACE_LG,
+            spacing=Theme.SPACE_MD,
+            md_bg_color=Colors.BG_BASE,
         )
 
         # Header
         header = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(64),
-            padding=[dp(16), dp(8)],
-            spacing=dp(8),
-            md_bg_color=Colors.BG_CARD,
+            height=dp(48),
+            spacing=Theme.SPACE_SM,
         )
-
-        menu_btn = MDIconButton(
-            icon="menu",
-            theme_icon_color="Custom",
-            icon_color=Colors.TEXT_PRIMARY,
-            on_release=self._open_drawer,
-        )
-        header.add_widget(menu_btn)
-
-        header_title = MDLabel(
-            text="Analises",
-            font_style="H6",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_PRIMARY,
+        header.add_widget(MDLabel(
+            text="Analytics",
+            font_style="H5",
             bold=True,
-        )
-        header.add_widget(header_title)
-
-        header.add_widget(MDBoxLayout())
-
-        refresh_btn = MDIconButton(
-            icon="refresh",
-            theme_icon_color="Custom",
-            icon_color=Colors.TEXT_SECONDARY,
-            on_release=self._load_analytics,
-        )
-        header.add_widget(refresh_btn)
-
-        main_layout.add_widget(header)
-
-        # Date range filter
-        date_bar = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=dp(56),
-            padding=[dp(16), dp(4)],
-            spacing=dp(8),
-            md_bg_color=Colors.BG_DARK,
-        )
-
-        self.date_from_field = MDTextField(
-            hint_text="Data inicial (DD/MM/AAAA)",
-            mode="round",
-            text="",
-            hint_text_color_normal=Colors.TEXT_HINT,
-            line_color_normal=Colors.BG_INPUT,
-            line_color_focus=Colors.PRIMARY_LIGHT,
-            text_color_normal=Colors.TEXT_PRIMARY,
-            text_color_focus=Colors.TEXT_PRIMARY,
-            fill_color_normal=Colors.BG_INPUT,
-            radius=[dp(8)],
-            size_hint_x=0.4,
-        )
-        date_bar.add_widget(self.date_from_field)
-
-        self.date_to_field = MDTextField(
-            hint_text="Data final (DD/MM/AAAA)",
-            mode="round",
-            text="",
-            hint_text_color_normal=Colors.TEXT_HINT,
-            line_color_normal=Colors.BG_INPUT,
-            line_color_focus=Colors.PRIMARY_LIGHT,
-            text_color_normal=Colors.TEXT_PRIMARY,
-            text_color_focus=Colors.TEXT_PRIMARY,
-            fill_color_normal=Colors.BG_INPUT,
-            radius=[dp(8)],
-            size_hint_x=0.4,
-        )
-        date_bar.add_widget(self.date_to_field)
-
-        filter_btn = MDRaisedButton(
-            text="Filtrar",
-            md_bg_color=Colors.PRIMARY,
-            text_color=Colors.TEXT_PRIMARY,
-            size_hint_x=0.2,
-            on_release=self._load_analytics,
-        )
-        date_bar.add_widget(filter_btn)
-
-        main_layout.add_widget(date_bar)
-
-        # Scrollable content
-        scroll = MDScrollView(do_scroll_x=False, bar_width=dp(4))
-
-        content = MDBoxLayout(
-            orientation="vertical",
-            padding=dp(16),
-            spacing=dp(16),
-            size_hint_y=None,
-        )
-        content.bind(minimum_height=content.setter("height"))
-
-        # Key metrics row
-        metrics_grid = MDGridLayout(
-            cols=4,
-            spacing=dp(12),
-            size_hint_y=None,
-            height=dp(112),
-        )
-
-        self.msg_card = AnalyticsCard(
-            title="Mensagens",
-            value="--",
-            subtitle="Total no periodo",
-            icon="message-text",
-            color=Colors.SECONDARY,
-        )
-        metrics_grid.add_widget(self.msg_card)
-
-        self.users_card = AnalyticsCard(
-            title="Novos Usuarios",
-            value="--",
-            subtitle="No periodo",
-            icon="account-plus",
-            color=Colors.SUCCESS,
-        )
-        metrics_grid.add_widget(self.users_card)
-
-        self.revenue_card = AnalyticsCard(
-            title="Receita",
-            value="--",
-            subtitle="No periodo",
-            icon="currency-usd",
-            color=Colors.WARNING,
-        )
-        metrics_grid.add_widget(self.revenue_card)
-
-        self.llm_card = AnalyticsCard(
-            title="Custo LLM",
-            value="--",
-            subtitle="Tokens utilizados",
-            icon="brain",
-            color=Colors.TEAL,
-        )
-        metrics_grid.add_widget(self.llm_card)
-
-        content.add_widget(metrics_grid)
-
-        # Charts row
-        charts_row = MDBoxLayout(
-            orientation="horizontal",
-            spacing=dp(12),
-            size_hint_y=None,
-            height=dp(260),
-        )
-
-        msg_chart = ChartPlaceholder(
-            title="Volume de Mensagens",
-            description="Mensagens por dia no periodo",
-            icon="chart-bar",
-        )
-        charts_row.add_widget(msg_chart)
-
-        user_chart = ChartPlaceholder(
-            title="Crescimento de Usuarios",
-            description="Novos usuarios por dia",
-            icon="chart-line",
-        )
-        charts_row.add_widget(user_chart)
-
-        content.add_widget(charts_row)
-
-        # Second charts row
-        charts_row2 = MDBoxLayout(
-            orientation="horizontal",
-            spacing=dp(12),
-            size_hint_y=None,
-            height=dp(260),
-        )
-
-        revenue_chart = ChartPlaceholder(
-            title="Receita",
-            description="Receita diaria no periodo",
-            icon="chart-areaspline",
-        )
-        charts_row2.add_widget(revenue_chart)
-
-        bot_chart = ChartPlaceholder(
-            title="Uso de Bots",
-            description="Bots mais ativos",
-            icon="robot",
-        )
-        charts_row2.add_widget(bot_chart)
-
-        content.add_widget(charts_row2)
-
-        # LLM usage section
-        llm_section = MDCard(
-            orientation="vertical",
-            padding=dp(16),
-            spacing=dp(8),
-            md_bg_color=Colors.BG_CARD,
-            radius=[dp(12)],
-            elevation=dp(4),
-            size_hint_y=None,
-            height=dp(200),
-        )
-
-        llm_title = MDLabel(
-            text="[b]Uso de LLM[/b]",
-            markup=True,
-            font_style="H6",
             theme_text_color="Custom",
             text_color=Colors.TEXT_PRIMARY,
-            size_hint_y=None,
-            height=dp(28),
-        )
-        llm_section.add_widget(llm_title)
+            size_hint_x=0.7,
+        ))
+        header.add_widget(MDRaisedButton(
+            text="Atualizar",
+            size_hint_x=None,
+            width=dp(120),
+            md_bg_color=Colors.PRIMARY,
+            text_color=Colors.BG_BASE,
+            on_release=lambda *a: self.load_data(),
+        ))
+        root.add_widget(header)
 
-        self.llm_details = MDBoxLayout(
+        # Content
+        scroll = MDScrollView(do_scroll_x=False, bar_width=dp(2))
+        self._content = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(4),
+            spacing=Theme.SPACE_LG,
+            padding=[0, 0, 0, Theme.SPACE_LG],
             size_hint_y=None,
-            height=dp(140),
+        )
+        self._content.bind(minimum_height=self._content.setter("height"))
+        scroll.add_widget(self._content)
+        root.add_widget(scroll)
+
+        self.add_widget(root)
+
+    def on_enter(self, *args):
+        if not self._content.children:
+            self.load_data()
+
+    # ── data loading ─────────────────────────────────────────────────────
+    def load_data(self):
+        self._clear_content()
+        spinner = MDSpinner(size_hint=(None, None), size=(dp(48), dp(48)))
+        spinner.active = True
+        self._content.add_widget(spinner)
+
+        def _fetch():
+            try:
+                dashboard = self._app.api.get_analytics_dashboard()
+                llm_usage = self._app.api.get_llm_usage()
+                Clock.schedule_once(lambda dt: self._render(dashboard, llm_usage), 0)
+            except Exception as e:
+                Clock.schedule_once(lambda dt, e=e: self._show_error(str(e)), 0)
+
+        import threading
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _render(self, dashboard: dict, llm_usage: dict):
+        self._clear_content()
+
+        messages = dashboard.get("messages", {})
+        bots = dashboard.get("bots", {})
+        users = dashboard.get("users", {})
+
+        # ── Summary row ──────────────────────────────────────────────
+        summary = MDBoxLayout(
+            orientation="horizontal",
+            spacing=Theme.SPACE_LG,
+            size_hint_y=None,
+            height=dp(96),
         )
 
-        llm_fields = [
-            ("Total de tokens", "--"),
-            ("Tokens de entrada", "--"),
-            ("Tokens de saida", "--"),
-            ("Modelo mais usado", "--"),
-            ("Custo total", "--"),
+        pairs = [
+            ("Total Mensagens", messages.get("total", 0), f"{messages.get('today', 0)} hoje", "message-text", Colors.PRIMARY),
+            ("Mensagens Semana", messages.get("week", 0), "últimos 7 dias", "email-multiple", Colors.WARNING),
+            ("Total Bots",      bots.get("total", 0),        f"{bots.get('active', 0)} ativos", "robot", Colors.INFO),
+            ("Usuários",        users.get("total", 0),       f"{users.get('active', 0)} ativos", "account-multiple", Colors.SUCCESS),
         ]
 
-        self.llm_labels = {}
-        for label_text, default_val in llm_fields:
-            row = MDBoxLayout(
+        for title, value, sub, icon, color in pairs:
+            card = MDCard(
                 orientation="horizontal",
-                size_hint_y=None,
-                height=dp(28),
-                spacing=dp(8),
+                padding=Theme.SPACE_LG,
+                spacing=Theme.SPACE_MD,
+                md_bg_color=Colors.BG_CARD,
+                radius=[Theme.RADIUS_LARGE],
+                elevation=Theme.ELEVATION_LOW,
+                size_hint_x=1,
+                height=dp(96),
             )
-            row.add_widget(MDLabel(
-                text=f"[b]{label_text}:[/b]",
-                markup=True,
-                font_style="Body2",
+            card.add_widget(MDIconButton(
+                icon=icon,
                 theme_text_color="Custom",
-                text_color=Colors.TEXT_SECONDARY,
-                size_hint_x=0.4,
+                text_color=color,
+                user_font_size=dp(28),
+                size_hint_x=None,
+                width=dp(52),
             ))
-            val_label = MDLabel(
-                text=default_val,
-                font_style="Body2",
+            box = MDBoxLayout(orientation="vertical", spacing=dp(2))
+            box.add_widget(MDLabel(
+                text=title,
+                font_style="Caption",
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_HINT,
+            ))
+            box.add_widget(MDLabel(
+                text=str(value),
+                font_style="H4",
+                bold=True,
                 theme_text_color="Custom",
                 text_color=Colors.TEXT_PRIMARY,
-                size_hint_x=0.6,
-            )
-            row.add_widget(val_label)
-            self.llm_labels[label_text] = val_label
-            self.llm_details.add_widget(row)
+            ))
+            box.add_widget(MDLabel(
+                text=sub,
+                font_style="Caption",
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_SECONDARY,
+            ))
+            card.add_widget(box)
+            summary.add_widget(card)
 
-        llm_section.add_widget(self.llm_details)
-        content.add_widget(llm_section)
+        self._content.add_widget(summary)
 
-        # Loading
-        self.loading_box = MDBoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=dp(0),
-            padding=dp(16),
-        )
-        self.loading_spinner = MDSpinner(
-            size_hint=(None, None),
-            size=(dp(48), dp(48)),
-            active=False,
-            color=Colors.PRIMARY_LIGHT,
-            pos_hint={"center_x": 0.5},
-        )
-        self.loading_box.add_widget(self.loading_spinner)
-        content.add_widget(self.loading_box)
+        # ── LLM Usage chart (if available) ──────────────────────────
+        llm_data = llm_usage.get("daily_usage", []) if isinstance(llm_usage, dict) else []
+        if llm_data:
+            chart_pairs = [
+                (item.get("date", ""), item.get("tokens", 0))
+                for item in llm_data
+                if isinstance(item, dict)
+            ]
+            if chart_pairs:
+                chart = _make_chart_card("Uso de LLM (tokens/dia)", chart_pairs, Colors.PRIMARY)
+                self._content.add_widget(chart)
 
-        scroll.add_widget(content)
-        main_layout.add_widget(scroll)
-        self.add_widget(main_layout)
+        # ── Messages by day (if available) ───────────────────────────
+        msg_daily = dashboard.get("daily_messages", [])
+        if msg_daily and isinstance(msg_daily, list):
+            msg_pairs = [
+                (item.get("date", ""), item.get("count", 0))
+                for item in msg_daily
+                if isinstance(item, dict)
+            ]
+            if msg_pairs:
+                chart = _make_chart_card("Mensagens por Dia", msg_pairs, Colors.INFO)
+                self._content.add_widget(chart)
 
-    def _open_drawer(self, *args):
-        nav_drawer = self.manager.parent.ids.get("nav_drawer") if hasattr(self.manager.parent, "ids") else None
-        if nav_drawer:
-            nav_drawer.set_state("open")
+    # ── helpers ──────────────────────────────────────────────────────────
+    def _clear_content(self):
+        self._content.clear_widgets()
 
-    def on_pre_enter(self):
-        self._load_analytics()
-
-    def _load_analytics(self, *args):
-        """Load analytics data from API."""
-        self.loading_box.height = dp(60)
-        self.loading_spinner.active = True
-
-        def _on_data(result, error):
-            self.loading_box.height = dp(0)
-            self.loading_spinner.active = False
-
-            if error:
-                return
-
-            if result:
-                self._update_metrics(result)
-                self._update_llm_details(result)
-
-        date_from = self.date_from_field.text.strip()
-        date_to = self.date_to_field.text.strip()
-        api_client.get_analytics_async(
-            _on_data,
-            date_from=date_from,
-            date_to=date_to,
-        )
-
-    def _update_metrics(self, data):
-        """Update metric cards."""
-        if "total_messages" in data:
-            self.msg_card.children[1].text = format_number(data["total_messages"])
-        if "new_users" in data:
-            self.users_card.children[1].text = format_number(data["new_users"])
-        if "revenue" in data:
-            self.revenue_card.children[1].text = format_currency(data["revenue"])
-        if "llm_cost" in data:
-            self.llm_card.children[1].text = format_currency(data["llm_cost"])
-
-    def _update_llm_details(self, data):
-        """Update LLM usage details."""
-        llm_data = data.get("llm_usage", {})
-        if not llm_data:
-            return
-
-        mappings = {
-            "Total de tokens": format_number(llm_data.get("total_tokens", 0)),
-            "Tokens de entrada": format_number(llm_data.get("input_tokens", 0)),
-            "Tokens de saida": format_number(llm_data.get("output_tokens", 0)),
-            "Modelo mais usado": llm_data.get("most_used_model", "N/A"),
-            "Custo total": format_currency(llm_data.get("total_cost", 0)),
-        }
-
-        for label, value in mappings.items():
-            if label in self.llm_labels:
-                self.llm_labels[label].text = value
+    def _show_error(self, msg: str):
+        self._clear_content()
+        self._content.add_widget(MDLabel(
+            text=f"Erro: {msg}",
+            font_style="Body1",
+            halign="center",
+            theme_text_color="Custom",
+            text_color=Colors.HIGHLIGHT,
+        ))

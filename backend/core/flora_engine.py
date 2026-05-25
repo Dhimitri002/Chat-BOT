@@ -1,228 +1,269 @@
-"""Flora Engine - Motor de conversa da Flora AI com LLMs reais."""
-import json
-import uuid
-from datetime import datetime
-from typing import AsyncGenerator, Optional
+"""
+Flora Platform — Flora AI Engine
+=================================
+The main Flora AI assistant logic.
+Handles personality, context awareness, memory integration,
+and multi-turn conversations.
+"""
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from backend.core.llm_router import LLMRouter
-from backend.models.bot import Bot
-from backend.models.flora_session import FloraSession
-from backend.models.memory import Memory
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FloraPersonality:
+    """Flora AI personality configuration."""
+    name: str = "Flora"
+    tone: str = "friendly"  # friendly, professional, casual, formal
+    language: str = "pt-BR"
+    emoji_usage: bool = True
+    max_response_length: int = 2000
+    creativity: float = 0.7  # 0.0 = conservative, 1.0 = creative
+
+    # Response style
+    use_bullet_points: bool = True
+    ask_followup_questions: bool = True
+    acknowledge_emotions: bool = True
+
+
+@dataclass
+class FloraMemory:
+    """Short-term memory for a Flora conversation."""
+    session_id: str
+    user_facts: dict = field(default_factory=dict)
+    conversation_topics: list = field(default_factory=list)
+    last_intent: str = ""
+    message_count: int = 0
+    created_at: str = ""
+
+    def __post_init__(self):
+        if not self.created_at:
+            self.created_at = datetime.now(timezone.utc).isoformat()
 
 
 class FloraEngine:
-    """Motor de conversa da Flora AI."""
+    """
+    Flora AI assistant engine.
 
-    def __init__(self, db: AsyncSession, bot: Bot, llm_router: Optional[LLMRouter] = None):
-        self.db = db
-        self.bot = bot
-        self.llm_router = llm_router or LLMRouter()
+    Features:
+    - Personality-driven responses
+    - Context awareness across conversation
+    - Memory of user preferences and facts
+    - Emotion detection and empathetic responses
+    - Multi-language support
+    """
 
-    def _get_system_prompt(self) -> str:
-        """Constrói o system prompt baseado na personalidade do bot."""
-        personality = self.bot.personality or "amigável e prestativa"
-        bot_name = self.bot.name or "Flora"
+    def __init__(
+        self,
+        llm_router=None,
+        personality: Optional[FloraPersonality] = None,
+        max_memory_sessions: int = 1000,
+    ):
+        self._router = llm_router
+        self._personality = personality or FloraPersonality()
+        self._memories: dict[str, FloraMemory] = {}
+        self._max_sessions = max_memory_sessions
 
-        return f"""Você é {bot_name}, uma assistente virtual {personality}.
+        logger.info(f"FloraEngine initialized: name={self._personality.name}")
 
-Regras importantes:
-- Seja concisa e direta nas respostas
-- Use linguagem natural e amigável
-- Se não souber algo, seja honesta e sugira alternativas
-- Não invente informações
-- Responda sempre em português brasileiro
-- Use emojis com moderação para tornar a conversa mais agradável
-- Se o usuário pedir algo fora do seu escopo, redirecione educadamente
-
-Personalidade: {personality}"""
-
-    async def _get_or_create_session(self, session_id: Optional[str] = None) -> FloraSession:
-        """Obtém ou cria uma sessão de conversa."""
-        if session_id:
-            result = await self.db.execute(
-                select(FloraSession).where(FloraSession.id == session_id)
-            )
-            session = result.scalar_one_or_none()
-            if session:
-                return session
-
-        # Criar nova sessão
-        new_session = FloraSession(
-            id=str(uuid.uuid4()),
-            bot_id=self.bot.id,
-            session_data={},
-            context={"message_count": 0},
-            is_active=True,
-        )
-        self.db.add(new_session)
-        await self.db.commit()
-        await self.db.refresh(new_session)
-        return new_session
-
-    async def _get_memory(self, session_id: str) -> list[dict]:
-        """Recupera histórico de conversa formatado para LLM."""
-        result = await self.db.execute(
-            select(Memory)
-            .where(Memory.session_id == session_id)
-            .order_by(Memory.created_at.asc())
-            .limit(20)  # Últimas 20 mensagens
-        )
-        memories = result.scalars().all()
-
-        messages = []
-        for mem in memories:
-            role = "user" if mem.memory_type == "user" else "assistant"
-            messages.append({"role": role, "content": mem.content})
-
-        return messages
-
-    async def _save_to_memory(self, session_id: str, role: str, content: str):
-        """Salva mensagem na memória da conversa."""
-        memory = Memory(
-            bot_id=self.bot.id,
-            session_id=session_id,
-            content=content,
-            memory_type="user" if role == "user" else "assistant",
-        )
-        self.db.add(memory)
-        await self.db.commit()
-
-    def _build_context(self, session_id: str, message: str, history: list[dict]) -> list[dict]:
-        """Constrói o contexto completo para a LLM."""
-        messages = [{"role": "system", "content": self._get_system_prompt()}]
-
-        # Adicionar histórico
-        messages.extend(history)
-
-        # Adicionar mensagem atual
-        messages.append({"role": "user", "content": message})
-
-        return messages
-
-    async def chat(self, message: str, session_id: Optional[str] = None) -> dict:
+    async def generate(
+        self,
+        message: str,
+        context: Any = None,
+        history: Optional[list[dict]] = None,
+    ) -> str:
         """
-        Processa mensagem e retorna resposta da Flora AI.
+        Generate a Flora AI response.
 
         Args:
-            message: Mensagem do usuário
-            session_id: ID da sessão (opcional, cria nova se não existir)
+            message: User's message
+            context: Chat context (bot_id, user_id, etc.)
+            history: Previous messages in the conversation
 
         Returns:
-            dict com content, session_id, model, provider, usage
+            Flora's response string
         """
-        # Obter ou criar sessão
-        session = await self._get_or_create_session(session_id)
-        sid = str(session.id)
+        start = time.time()
 
-        # Recuperar histórico
-        history = await self._get_memory(sid)
-
-        # Salvar mensagem do usuário
-        await self._save_to_memory(sid, "user", message)
-
-        # Construir contexto
-        messages = self._build_context(sid, message, history)
-
-        # Determinar plano (padrão starter se não houver)
-        plan = "starter"
-        if self.bot.config and isinstance(self.bot.config, dict):
-            plan = self.bot.config.get("plan", "starter")
-
-        # Chamar LLM
         try:
-            result = await self.llm_router.chat(messages, plan=plan)
-        except ValueError as e:
-            # Rate limit ou sem provedores
-            result = {
-                "content": f"Desculpe, estou temporariamente indisponível. {str(e)}",
-                "model": "error",
-                "provider": "none",
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            }
+            session_id = getattr(context, "session_id", "default") if context else "default"
+            memory = self._get_memory(session_id)
+
+            # Build system prompt with personality and memory
+            system_prompt = self._build_system_prompt(memory, context)
+
+            # Assemble messages
+            messages = []
+            if history:
+                # Use recent history (last 10 messages)
+                messages.extend(history[-10:])
+            else:
+                messages.append({"role": "user", "content": message})
+
+            # Generate response
+            if self._router:
+                response = await self._router.chat(
+                    messages=messages,
+                    system=system_prompt,
+                    temperature=self._personality.creativity,
+                    max_tokens=self._personality.max_response_length,
+                )
+                result = response.content
+            else:
+                result = self._fallback_response(message)
+
+            # Update memory
+            memory.message_count += 1
+            self._extract_facts(message, result, memory)
+
+            elapsed = time.time() - start
+            logger.debug(f"Flora response generated in {elapsed:.2f}s")
+
+            return result
+
         except Exception as e:
-            result = {
-                "content": "Desculpe, ocorreu um erro ao processar sua mensagem. Tente novamente.",
-                "model": "error",
-                "provider": "none",
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            }
+            logger.error(f"FloraEngine error: {e}", exc_info=True)
+            return self._error_response()
 
-        # Salvar resposta
-        await self._save_to_memory(sid, "assistant", result["content"])
+    def _build_system_prompt(self, memory: FloraMemory, context: Any = None) -> str:
+        """Build a system prompt incorporating personality and memory."""
+        p = self._personality
 
-        # Atualizar sessão
-        if session.context is None:
-            session.context = {}
-        session.context["message_count"] = session.context.get("message_count", 0) + 1
-        session.updated_at = datetime.utcnow()
-        await self.db.commit()
+        prompt_parts = [
+            f"Você é {p.name}, uma assistente virtual inteligente e prestativa.",
+        ]
 
-        return {
-            "content": result["content"],
-            "session_id": sid,
-            "model": result.get("model", "unknown"),
-            "provider": result.get("provider", "unknown"),
-            "usage": result.get("usage", {}),
+        # Tone
+        tone_map = {
+            "friendly": "Seja amigável, calorosa e acessível.",
+            "professional": "Mantenha um tom profissional e objetivo.",
+            "casual": "Seja descontraída e use linguagem informal.",
+            "formal": "Use linguagem formal e educada.",
+        }
+        prompt_parts.append(tone_map.get(p.tone, tone_map["friendly"]))
+
+        # Language
+        if p.language == "pt-BR":
+            prompt_parts.append("Responda sempre em português brasileiro.")
+        elif p.language == "en-US":
+            prompt_parts.append("Always respond in English.")
+
+        # Emoji
+        if p.emoji_usage:
+            prompt_parts.append("Use emojis com moderação para tornar a conversa mais expressiva.")
+
+        # Emotion acknowledgment
+        if p.acknowledge_emotions:
+            prompt_parts.append("Reconheça as emoções do usuário e responda com empatia.")
+
+        # Memory facts
+        if memory.user_facts:
+            prompt_parts.append("\nSobre o usuário:")
+            for key, value in memory.user_facts.items():
+                prompt_parts.append(f"- {key}: {value}")
+
+        # Context
+        if context:
+            if hasattr(context, "user_name") and context.user_name:
+                prompt_parts.append(f"\nO usuário se chama {context.user_name}.")
+            if hasattr(context, "metadata") and context.metadata.get("bot_name"):
+                prompt_parts.append(f"Você está operando como {context.metadata['bot_name']}.")
+
+        # Response guidelines
+        prompt_parts.append("\nDiretrizes:")
+        prompt_parts.append("- Seja concisa mas completa")
+        prompt_parts.append("- Faça perguntas de acompanhamento quando apropriado")
+        prompt_parts.append("- Se não souber algo, seja honesta")
+        prompt_parts.append("- Nunca invente informações factuais")
+
+        return "\n".join(prompt_parts)
+
+    def _get_memory(self, session_id: str) -> FloraMemory:
+        """Get or create memory for a session."""
+        if session_id not in self._memories:
+            # Evict oldest if at capacity
+            if len(self._memories) >= self._max_sessions:
+                oldest_key = next(iter(self._memories))
+                del self._memories[oldest_key]
+                logger.debug(f"Evicted memory session: {oldest_key}")
+
+            self._memories[session_id] = FloraMemory(session_id=session_id)
+
+        return self._memories[session_id]
+
+    def _extract_facts(self, user_message: str, response: str, memory: FloraMemory) -> None:
+        """Extract and store user facts from conversation."""
+        # Simple keyword-based fact extraction
+        import re
+
+        name_match = re.search(
+            r"(?:meu nome e|me chamo|sou o|sou a)\s+(\w+)",
+            user_message,
+            re.IGNORECASE,
+        )
+        if name_match:
+            memory.user_facts["nome"] = name_match.group(1).capitalize()
+
+        # Track topics
+        topic_keywords = {
+            "agendamento": "agendamento",
+            "horario": "agendamento",
+            "preco": "precos",
+            "valor": "precos",
+            "pagamento": "pagamento",
+            "suporte": "suporte",
+            "problema": "suporte",
+            "duvida": "duvidas",
         }
 
-    async def chat_stream(
-        self, message: str, session_id: Optional[str] = None
-    ) -> AsyncGenerator[str, None]:
-        """
-        Streaming de resposta da Flora AI.
+        for keyword, topic in topic_keywords.items():
+            if keyword in user_message.lower() and topic not in memory.conversation_topics:
+                memory.conversation_topics.append(topic)
 
-        Args:
-            message: Mensagem do usuário
-            session_id: ID da sessão
-
-        Yields:
-            Chunks da resposta
-        """
-        # Obter ou criar sessão
-        session = await self._get_or_create_session(session_id)
-        sid = str(session.id)
-
-        # Recuperar histórico
-        history = await self._get_memory(sid)
-
-        # Salvar mensagem do usuário
-        await self._save_to_memory(sid, "user", message)
-
-        # Construir contexto
-        messages = self._build_context(sid, message, history)
-
-        # Determinar plano
-        plan = "starter"
-        if self.bot.config and isinstance(self.bot.config, dict):
-            plan = self.bot.config.get("plan", "starter")
-
-        # Chamar LLM com streaming
-        full_response = ""
-        try:
-            async for chunk in self.llm_router.chat_stream(messages, plan=plan):
-                full_response += chunk
-                yield chunk
-        except Exception as e:
-            error_msg = "Desculpe, ocorreu um erro ao processar sua mensagem."
-            yield error_msg
-            full_response = error_msg
-
-        # Salvar resposta completa
-        await self._save_to_memory(sid, "assistant", full_response)
-
-        # Atualizar sessão
-        if session.context is None:
-            session.context = {}
-        session.context["message_count"] = session.context.get("message_count", 0) + 1
-        session.updated_at = datetime.utcnow()
-        await self.db.commit()
-
-    async def clear_memory(self, session_id: str):
-        """Limpa a memória de uma sessão."""
-        await self.db.execute(
-            Memory.__table__.delete().where(Memory.session_id == session_id)
+    def _fallback_response(self, message: str) -> str:
+        """Fallback response when LLM is unavailable."""
+        return (
+            "Obrigada por sua mensagem! No momento estou com dificuldades "
+            "técnicas para processar sua solicitação. Por favor, tente novamente "
+            "em alguns instantes."
         )
-        await self.db.commit()
+
+    def _error_response(self) -> str:
+        """Error response."""
+        return (
+            "Desculpe, ocorreu um erro inesperado. "
+            "Por favor, tente novamente."
+        )
+
+    def clear_memory(self, session_id: str) -> None:
+        """Clear memory for a session."""
+        self._memories.pop(session_id, None)
+        logger.info(f"Flora memory cleared: {session_id}")
+
+    def get_memory(self, session_id: str) -> Optional[FloraMemory]:
+        """Get memory for a session."""
+        return self._memories.get(session_id)
+
+    def update_personality(self, **kwargs) -> None:
+        """Update Flora's personality settings."""
+        for key, value in kwargs.items():
+            if hasattr(self._personality, key):
+                setattr(self._personality, key, value)
+                logger.info(f"Flora personality updated: {key}={value}")
+
+    def get_stats(self) -> dict:
+        """Return engine statistics."""
+        return {
+            "active_sessions": len(self._memories),
+            "total_messages": sum(m.message_count for m in self._memories.values()),
+            "personality": {
+                "name": self._personality.name,
+                "tone": self._personality.tone,
+                "language": self._personality.language,
+            },
+        }

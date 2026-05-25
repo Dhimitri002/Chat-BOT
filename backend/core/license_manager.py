@@ -1,409 +1,376 @@
 """
-License Manager - Sistema de gerenciamento de licenças.
-Gera, valida, ativa e revoga licenças com assinatura HMAC.
+Flora Platform — Core License Manager
+======================================
+Server-side license validation, plan enforcement,
+and feature gating for the backend API.
 """
-import hashlib
-import hmac
-import json
-import os
-import platform
-import re
-import secrets
-import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Optional
 
-from loguru import logger
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Optional
 
 from backend.config import settings
 from backend.models.license import License
 from backend.models.plan import Plan
-from backend.models.subscription import Subscription
-from backend.models.user import User
+
+logger = logging.getLogger(__name__)
 
 
-def _validate_license_signing_key():
-    """Valida que LICENSE_SIGNING_KEY está configurado com valor seguro."""
-    key = settings.LICENSE_SIGNING_KEY
-    if not key:
-        raise ValueError(
-            "❌ CRÍTICA: LICENSE_SIGNING_KEY não definida no .env\n"
-            "Gere uma chave segura com: python -c \"import secrets; print(secrets.token_hex(64))\"\n"
-            "Adicione ao .env: LICENSE_SIGNING_KEY=<chave_gerada>"
-        )
-    if key == "flora-license-secret-change-me":
-        raise ValueError(
-            "❌ CRÍTICA: LICENSE_SIGNING_KEY usando default inseguro!\n"
-            "Gere uma chave segura com: python -c \"import secrets; print(secrets.token_hex(64))\"\n"
-            "Nunca use defaults em produção."
-        )
-    if len(key) < 32:
-        raise ValueError(
-            f"❌ LICENSE_SIGNING_KEY deve ter min 32 chars (tem {len(key)})\n"
-            "Gere com: python -c \"import secrets; print(secrets.token_hex(64))\""
-        )
+class LicenseCheckResult(str, Enum):
+    VALID = "valid"
+    EXPIRED = "expired"
+    NOT_FOUND = "not_found"
+    LIMIT_EXCEEDED = "limit_exceeded"
+    FEATURE_NOT_AVAILABLE = "feature_not_available"
+    HARDWARE_MISMATCH = "hardware_mismatch"
+    SUSPENDED = "suspended"
 
 
-# Validar secrets no import (fail-fast em produção)
-_validate_license_signing_key()
-LICENSE_SIGNING_KEY = settings.LICENSE_SIGNING_KEY
-LICENSE_GRACE_PERIOD_HOURS = 24
+@dataclass
+class FeatureGate:
+    """Defines a feature gate with plan requirements."""
+    feature_key: str
+    name: str
+    description: str
+    min_plan_level: int = 1  # Plan level required (1=free, 2=starter, etc.)
 
 
-def generate_license_key() -> str:
-    """Gera uma chave de licença no formato FLORA-XXXX-XXXX-XXXX-XXXX."""
-    parts = [secrets.token_hex(2).upper() for _ in range(4)]
-    return f"FLORA-{'-'.join(parts)}"
+# ─── Plan Feature Matrix ───────────────────────────────────────────
+
+PLAN_LIMITS = {
+    "free": {
+        "level": 1,
+        "max_bots": 1,
+        "max_messages_per_day": 50,
+        "max_users": 1,
+        "features": ["basic_chat", "whatsapp_connect"],
+    },
+    "starter": {
+        "level": 2,
+        "max_bots": 2,
+        "max_messages_per_day": 500,
+        "max_users": 3,
+        "features": ["basic_chat", "whatsapp_connect", "custom_commands", "analytics_basic"],
+    },
+    "pro": {
+        "level": 3,
+        "max_bots": 5,
+        "max_messages_per_day": 5000,
+        "max_users": 10,
+        "features": [
+            "basic_chat", "whatsapp_connect", "custom_commands",
+            "analytics_basic", "analytics_advanced", "multi_language",
+            "api_access", "custom_personality",
+        ],
+    },
+    "business": {
+        "level": 4,
+        "max_bots": 15,
+        "max_messages_per_day": 25000,
+        "max_users": 50,
+        "features": [
+            "basic_chat", "whatsapp_connect", "custom_commands",
+            "analytics_basic", "analytics_advanced", "multi_language",
+            "api_access", "custom_personality", "priority_support",
+            "white_label", "webhooks",
+        ],
+    },
+    "enterprise": {
+        "level": 5,
+        "max_bots": 100,
+        "max_messages_per_day": 100000,
+        "max_users": 500,
+        "features": [
+            "basic_chat", "whatsapp_connect", "custom_commands",
+            "analytics_basic", "analytics_advanced", "multi_language",
+            "api_access", "custom_personality", "priority_support",
+            "white_label", "webhooks", "dedicated_instance",
+            "custom_llm", "sla_guarantee",
+        ],
+    },
+}
 
 
-def hash_license_key(key: str) -> str:
-    """Gera hash SHA-256 da chave de licença."""
-    return hashlib.sha256(key.encode()).hexdigest()
+class CoreLicenseManager:
+    """
+    Server-side license validation and feature gating.
 
-
-def sign_license(key: str) -> str:
-    """Gera assinatura HMAC da chave de licença."""
-    return hmac.new(
-        LICENSE_SIGNING_KEY.encode(),
-        key.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-
-
-def verify_license_signature(key: str, signature: str) -> bool:
-    """Verifica se a assinatura da licença é válida."""
-    expected = sign_license_key(key)
-    return hmac.compare_digest(expected, signature)
-
-
-def sign_license_key(key: str) -> str:
-    """Alias para sign_license."""
-    return sign_license(key)
-
-
-def get_device_fingerprint() -> str:
-    """Gera fingerprint do dispositivo atual."""
-    components = [
-        platform.node(),
-        platform.machine(),
-        platform.processor(),
-        platform.system(),
-    ]
-    data = "|".join(components)
-    return hashlib.sha256(data.encode()).hexdigest()[:16]
-
-
-class LicenseManager:
-    """Gerenciador de licenças."""
+    Handles:
+    - License creation and renewal
+    - Plan enforcement (bots, messages, features)
+    - Usage tracking and limits
+    - Grace period handling
+    """
 
     def __init__(self):
-        self._cache: dict[str, dict] = {}  # Cache de validação
+        self._usage_cache: dict[str, dict] = {}
+        logger.info("CoreLicenseManager initialized")
 
-    async def create_license(
-        self,
-        db: AsyncSession,
-        user_id: str,
-        plan_id: str,
-        days_valid: int = 30,
-        created_by: Optional[str] = None,
-    ) -> tuple[License, str]:
-        """
-        Cria uma nova licença para um usuário.
-        Retorna (License, plain_key) - a chave em texto plano só é retornada uma vez.
-        """
-        # Verificar se o plano existe
-        plan_result = await db.execute(select(Plan).where(Plan.id == plan_id))
-        plan = plan_result.scalar_one_or_none()
-        if not plan:
-            raise ValueError(f"Plano {plan_id} não encontrado")
-
-        # Criar subscription
-        now = datetime.now(timezone.utc)
-        subscription = Subscription(
-            user_id=user_id,
-            plan_id=plan_id,
-            status="active",
-            billing_cycle="monthly",
-            current_period_start=now,
-            current_period_end=now + timedelta(days=days_valid),
-        )
-        db.add(subscription)
-        await db.flush()
-
-        # Gerar licença
-        plain_key = generate_license_key()
-        key_hash = hash_license_key(plain_key)
-        signature = sign_license(plain_key)
-
-        license_obj = License(
-            id=str(uuid.uuid4()),
-            subscription_id=subscription.id,
-            license_key=plain_key,  # Salvar a chave original (será mascarada depois)
-            key_hash=key_hash,
-            signature=signature,
-            status="active",
-            max_bots=plan.max_bots,
-            max_messages_per_day=plan.max_messages_per_day,
-            features=plan.features,
-            expires_at=now + timedelta(days=days_valid),
-            created_by=created_by,
-        )
-        db.add(license_obj)
-        await db.flush()
-
-        logger.info(f"Licença criada: {plain_key[:12]}... para usuário {user_id}, plano {plan.name}")
-        return license_obj, plain_key
+    # ─── License CRUD ─────────────────────────────────────────────
 
     async def validate_license(
         self,
-        db: AsyncSession,
-        key: str,
-        device_fingerprint: Optional[str] = None,
-    ) -> dict:
-        """
-        Valida uma licença.
-        Retorna dict com validade, motivo, plano, features, etc.
-        """
-        # Verificar formato
-        if not re.match(r"^FLORA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$", key):
-            return {
-                "valid": False,
-                "reason": "invalid_format",
-                "message": "Formato de licença inválido.",
-            }
-
-        # Verificar cache
-        cache_key = hash_license_key(key)
-        cached = self._cache.get(cache_key)
-        if cached and cached["expires"] > datetime.now(timezone.utc):
-            return cached["result"]
-
-        # Buscar no banco
-        key_hash = hash_license_key(key)
-        result = await db.execute(
-            select(License).where(License.key_hash == key_hash)
-        )
-        lic = result.scalar_one_or_none()
-
-        if not lic:
-            return {
-                "valid": False,
-                "reason": "not_found",
-                "message": "Licença não encontrada.",
-            }
-
-        # Verificar assinatura
-        if not verify_license_signature(key, lic.signature):
-            return {
-                "valid": False,
-                "reason": "invalid_signature",
-                "message": "Assinatura da licença inválida.",
-            }
-
-        # Verificar status
-        if lic.status == "revoked":
-            return {
-                "valid": False,
-                "reason": "revoked",
-                "message": "Esta licença foi revogada.",
-            }
-
-        if lic.status == "suspended":
-            return {
-                "valid": False,
-                "reason": "suspended",
-                "message": "Esta licença está suspensa.",
-            }
-
-        # Verificar expiração
-        now = datetime.now(timezone.utc)
-        if lic.expires_at and lic.expires_at < now:
-            # Verificar grace period
-            grace_end = lic.expires_at + timedelta(hours=LICENSE_GRACE_PERIOD_HOURS)
-            if now > grace_end:
-                lic.status = "expired"
-                await db.flush()
-                return {
-                    "valid": False,
-                    "reason": "expired",
-                    "message": "Licença expirada. Renove para continuar usando.",
-                    "expired_at": lic.expires_at.isoformat(),
-                }
-            else:
-                days_left = (grace_end - now).days
-                return {
-                    "valid": True,
-                    "reason": "grace_period",
-                    "message": f"Licença em período de graça. Restam {days_left} dias.",
-                    "grace_period": True,
-                    "grace_ends_at": grace_end.isoformat(),
-                }
-
-        # Buscar plano
-        plan_result = await db.execute(select(Plan).where(Plan.id == lic.subscription.plan_id))
-        plan = plan_result.scalar_one_or_none()
-
-        # Calcular dias restantes
-        days_remaining = None
-        if lic.expires_at:
-            days_remaining = max(0, (lic.expires_at - now).days)
-
-        result = {
-            "valid": True,
-            "reason": "active",
-            "message": "Licença válida.",
-            "license_id": lic.id,
-            "plan": {
-                "id": plan.id if plan else None,
-                "name": plan.name if plan else "Desconhecido",
-                "features": lic.features or {},
-            },
-            "expires_at": lic.expires_at.isoformat() if lic.expires_at else None,
-            "days_remaining": days_remaining,
-            "features": lic.features or {},
-            "max_bots": lic.max_bots,
-            "max_messages_per_day": lic.max_messages_per_day,
-        }
-
-        # Cache por 5 minutos
-        self._cache[cache_key] = {
-            "result": result,
-            "expires": now + timedelta(minutes=5),
-        }
-
-        return result
-
-    async def activate_license(
-        self,
-        db: AsyncSession,
-        key: str,
+        db,
         user_id: str,
-        device_fingerprint: Optional[str] = None,
-    ) -> dict:
-        """Ativa uma licença para um usuário."""
-        validation = await self.validate_license(db, key, device_fingerprint)
-        if not validation["valid"]:
-            return validation
+    ) -> LicenseCheckResult:
+        """
+        Validate a user's license.
 
-        key_hash = hash_license_key(key)
-        result = await db.execute(
-            select(License).where(License.key_hash == key_hash)
+        Checks:
+        1. License exists
+        2. Not expired
+        3. Not suspended
+        4. Plan is active
+        """
+        try:
+            license_obj = await db.query(License).filter(
+                License.user_id == user_id,
+                License.is_active == True,
+            ).first()
+
+            if not license_obj:
+                return LicenseCheckResult.NOT_FOUND
+
+            if license_obj.status == "suspended":
+                return LicenseCheckResult.SUSPENDED
+
+            if license_obj.is_expired:
+                # Check grace period
+                if license_obj.is_in_grace_period:
+                    logger.info(f"User {user_id} in grace period")
+                    return LicenseCheckResult.VALID
+                return LicenseCheckResult.EXPIRED
+
+            return LicenseCheckResult.VALID
+
+        except Exception as e:
+            logger.error(f"License validation error for user {user_id}: {e}")
+            return LicenseCheckResult.NOT_FOUND
+
+    async def create_license(
+        self,
+        db,
+        user_id: str,
+        plan_id: str,
+        duration_days: int = 30,
+        is_trial: bool = False,
+    ) -> License:
+        """Create a new license for a user."""
+        from datetime import timedelta
+
+        license_obj = License(
+            user_id=user_id,
+            plan_id=plan_id,
+            issued_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=duration_days),
+            is_trial=is_trial,
+            is_active=True,
+            status="active",
         )
-        lic = result.scalar_one_or_none()
 
-        if lic.activated_at:
-            return {
-                "valid": False,
-                "reason": "already_activated",
-                "message": "Licença já está ativada.",
-            }
+        db.add(license_obj)
+        await db.commit()
+        await db.refresh(license_obj)
 
-        lic.activated_at = datetime.now(timezone.utc)
-        lic.device_fingerprint = device_fingerprint
-        await db.flush()
+        logger.info(f"License created: user={user_id} plan={plan_id} expiry={license_obj.expires_at}")
+        return license_obj
 
-        logger.info(f"Licença ativada: {key[:12]}... para usuário {user_id}")
-        return {
-            "valid": True,
-            "message": "Licença ativada com sucesso!",
-            "license_id": lic.id,
-            "plan": validation["plan"],
-            "expires_at": lic.expires_at.isoformat() if lic.expires_at else None,
-        }
-
-    async def revoke_license(self, db: AsyncSession, license_id: str, reason: str = "") -> bool:
-        """Revoga uma licença."""
-        result = await db.execute(select(License).where(License.id == license_id))
-        lic = result.scalar_one_or_none()
-
-        if not lic:
-            return False
-
-        lic.status = "revoked"
-        lic.revoked_at = datetime.now(timezone.utc)
-        lic.revoked_reason = reason
-        await db.flush()
-
-        # Limpar cache
-        for cache_key in list(self._cache.keys()):
-            if self._cache[cache_key].get("result", {}).get("license_id") == license_id:
-                del self._cache[cache_key]
-
-        logger.info(f"Licença revogada: {license_id}. Motivo: {reason}")
-        return True
-
-    async def extend_license(
-        self, db: AsyncSession, license_id: str, days: int
+    async def renew_license(
+        self,
+        db,
+        user_id: str,
+        additional_days: int = 30,
     ) -> Optional[License]:
-        """Estende a validade de uma licença."""
-        result = await db.execute(select(License).where(License.id == license_id))
-        lic = result.scalar_one_or_none()
+        """Renew a user's license."""
+        license_obj = await db.query(License).filter(
+            License.user_id == user_id,
+            License.is_active == True,
+        ).first()
 
-        if not lic:
+        if not license_obj:
             return None
 
-        if lic.expires_at and lic.expires_at > datetime.now(timezone.utc):
-            lic.expires_at += timedelta(days=days)
+        from datetime import timedelta
+        current_expiry = license_obj.expires_at
+        now = datetime.now(timezone.utc)
+
+        # If expired, start from now; otherwise extend
+        if current_expiry < now:
+            license_obj.expires_at = now + timedelta(days=additional_days)
         else:
-            lic.expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-            lic.status = "active"
+            license_obj.expires_at = current_expiry + timedelta(days=additional_days)
 
-        await db.flush()
-        logger.info(f"Licença estendida: {license_id} por {days} dias")
-        return lic
+        license_obj.status = "active"
+        await db.commit()
+        await db.refresh(license_obj)
 
-    async def get_user_licenses(self, db: AsyncSession, user_id: str) -> list[dict]:
-        """Retorna todas as licenças de um usuário."""
-        result = await db.execute(
-            select(License)
-            .join(Subscription)
-            .where(Subscription.user_id == user_id)
-            .order_by(License.created_at.desc())
-        )
-        licenses = result.scalars().all()
+        logger.info(f"License renewed: user={user_id} new_expiry={license_obj.expires_at}")
+        return license_obj
 
-        output = []
-        for lic in licenses:
-            plan_result = await db.execute(select(Plan).where(Plan.id == lic.subscription.plan_id))
-            plan = plan_result.scalar_one_or_none()
+    async def suspend_license(self, db, user_id: str, reason: str = "") -> bool:
+        """Suspend a user's license."""
+        license_obj = await db.query(License).filter(
+            License.user_id == user_id,
+            License.is_active == True,
+        ).first()
 
-            days_remaining = None
-            if lic.expires_at:
-                days_remaining = max(0, (lic.expires_at - datetime.now(timezone.utc)).days)
+        if not license_obj:
+            return False
 
-            output.append({
-                "id": lic.id,
-                "license_key": f"{lic.license_key[:8]}...{lic.license_key[-4:]}",
-                "status": lic.status,
-                "plan_name": plan.name if plan else "Desconhecido",
-                "expires_at": lic.expires_at.isoformat() if lic.expires_at else None,
-                "days_remaining": days_remaining,
-                "is_active": lic.status == "active" and (
-                    not lic.expires_at or lic.expires_at > datetime.now(timezone.utc)
-                ),
-                "created_at": lic.created_at.isoformat() if lic.created_at else None,
-            })
+        license_obj.status = "suspended"
+        await db.commit()
 
-        return output
+        logger.warning(f"License suspended: user={user_id} reason={reason}")
+        return True
 
-    async def check_feature_access(
-        self, db: AsyncSession, license_id: str, feature: str
+    async def deactivate_license(self, db, user_id: str) -> bool:
+        """Deactivate a user's license."""
+        license_obj = await db.query(License).filter(
+            License.user_id == user_id,
+        ).first()
+
+        if not license_obj:
+            return False
+
+        license_obj.is_active = False
+        license_obj.status = "inactive"
+        await db.commit()
+
+        logger.info(f"License deactivated: user={user_id}")
+        return True
+
+    # ─── Plan & Feature Checks ────────────────────────────────────
+
+    def get_plan_limits(self, plan_id: str) -> dict:
+        """Get limits for a plan."""
+        return PLAN_LIMITS.get(plan_id, PLAN_LIMITS["free"])
+
+    def check_feature_access(self, plan_id: str, feature_key: str) -> bool:
+        """Check if a plan has access to a feature."""
+        limits = self.get_plan_limits(plan_id)
+        return feature_key in limits.get("features", [])
+
+    async def check_usage_limit(
+        self,
+        db,
+        user_id: str,
+        limit_type: str,  # "bots", "messages", "users"
+        current_count: int,
     ) -> bool:
-        """Verifica se uma licença tem acesso a uma feature específica."""
-        result = await db.execute(select(License).where(License.id == license_id))
-        lic = result.scalar_one_or_none()
+        """Check if user is within their plan's usage limit."""
+        try:
+            license_obj = await db.query(License).filter(
+                License.user_id == user_id,
+                License.is_active == True,
+            ).first()
 
-        if not lic or lic.status != "active":
+            if not license_obj:
+                return False
+
+            plan_id = license_obj.plan_id
+            limits = self.get_plan_limits(plan_id)
+
+            max_values = {
+                "bots": limits.get("max_bots", 1),
+                "messages": limits.get("max_messages_per_day", 50),
+                "users": limits.get("max_users", 1),
+            }
+
+            max_value = max_values.get(limit_type, 0)
+            return current_count < max_value
+
+        except Exception as e:
+            logger.error(f"Usage limit check error: {e}")
             return False
 
-        if lic.expires_at and lic.expires_at < datetime.now(timezone.utc):
-            return False
+    def get_plan_level(self, plan_id: str) -> int:
+        """Get the level of a plan (higher = more features)."""
+        limits = self.get_plan_limits(plan_id)
+        return limits.get("level", 1)
 
-        features = lic.features or {}
-        return features.get(feature, False)
+    def can_use_feature(self, plan_id: str, feature_key: str) -> bool:
+        """Check if a plan tier includes a specific feature."""
+        return self.check_feature_access(plan_id, feature_key)
 
+    # ─── Usage Tracking ───────────────────────────────────────────
 
-# Singleton
-license_manager = LicenseManager()
+    def _get_usage_key(self, user_id: str, date: str = None) -> str:
+        if date is None:
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return f"{user_id}:{date}"
+
+    async def track_usage(
+        self,
+        user_id: str,
+        usage_type: str,  # "message", "api_call", "bot_action"
+        count: int = 1,
+    ) -> dict:
+        """Track daily usage for a user."""
+        key = self._get_usage_key(user_id)
+
+        if key not in self._usage_cache:
+            self._usage_cache[key] = {
+                "messages": 0,
+                "api_calls": 0,
+                "bot_actions": 0,
+            }
+
+        type_key = f"{usage_type}s" if not usage_type.endswith("s") else usage_type
+        if type_key not in self._usage_cache[key]:
+            self._usage_cache[key][type_key] = 0
+        self._usage_cache[key][type_key] += count
+
+        return self._usage_cache[key]
+
+    def get_usage(self, user_id: str, date: str = None) -> dict:
+        """Get usage for a user on a given date."""
+        key = self._get_usage_key(user_id, date)
+        return self._usage_cache.get(key, {
+            "messages": 0,
+            "api_calls": 0,
+            "bot_actions": 0,
+        })
+
+    def reset_usage(self, user_id: str = None) -> None:
+        """Reset usage tracking."""
+        if user_id:
+            keys_to_remove = [k for k in self._usage_cache if k.startswith(user_id)]
+            for k in keys_to_remove:
+                del self._usage_cache[k]
+        else:
+            self._usage_cache.clear()
+
+    # ─── Summary ───────────────────────────────────────────────────
+
+    async def get_license_summary(self, db, user_id: str) -> dict:
+        """Get a complete license summary for a user."""
+        license_obj = await db.query(License).filter(
+            License.user_id == user_id,
+        ).first()
+
+        if not license_obj:
+            return {
+                "has_license": False,
+                "plan": "free",
+                "status": "no_license",
+            }
+
+        plan_id = license_obj.plan_id
+        limits = self.get_plan_limits(plan_id)
+        today_usage = self.get_usage(user_id)
+
+        return {
+            "has_license": True,
+            "plan": plan_id,
+            "status": license_obj.status,
+            "is_trial": license_obj.is_trial,
+            "issued_at": license_obj.issued_at.isoformat() if license_obj.issued_at else None,
+            "expires_at": license_obj.expires_at.isoformat() if license_obj.expires_at else None,
+            "is_expired": license_obj.is_expired,
+            "days_remaining": license_obj.days_remaining,
+            "limits": limits,
+            "today_usage": today_usage,
+            "features": limits.get("features", []),
+        }

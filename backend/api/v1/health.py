@@ -1,79 +1,75 @@
-"""Health Check Endpoint - Verificação de saúde do sistema."""
+"""Flora Platform — Health Check Endpoints"""
+from __future__ import annotations
+
+import os
+import platform
+import time
 from datetime import datetime, timezone
 
+import psutil
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.deps import get_db
+from backend.database import async_engine, check_db_health
 from backend.config import settings
 
 router = APIRouter(tags=["health"])
 
+# Track startup time
+_STARTUP_TIME = time.time()
 
-@router.get("/health")
-async def health_check(db: AsyncSession = Depends(get_db)):
-    """
-    Health check completo do sistema.
-    Verifica: banco de dados, Redis, WhatsApp Manager, LLM Router.
-    """
-    health = {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "version": settings.APP_VERSION,
-        "environment": settings.ENVIRONMENT,
-        "checks": {},
-    }
 
-    # Check Database
+def _get_uptime_seconds() -> float:
+    return round(time.time() - _STARTUP_TIME, 2)
+
+
+def _get_system_info() -> dict:
+    """Get real system information."""
     try:
-        await db.execute(text("SELECT 1"))
-        health["checks"]["database"] = {"status": "ok", "latency_ms": 0}
-    except Exception as e:
-        health["checks"]["database"] = {"status": "error", "error": str(e)}
-        health["status"] = "degraded"
-
-    # Check WhatsApp Manager
-    try:
-        from backend.core.whatsapp_manager import whatsapp_manager
-        active_sessions = len(whatsapp_manager.sessions)
-        health["checks"]["whatsapp_manager"] = {
-            "status": "ok",
-            "active_sessions": active_sessions,
+        process = psutil.Process(os.getpid())
+        mem_info = process.memory_info()
+        return {
+            "cpu_percent": psutil.cpu_percent(interval=0.1),
+            "memory": {
+                "rss_mb": round(mem_info.rss / (1024 * 1024), 2),
+                "vms_mb": round(mem_info.vms / (1024 * 1024), 2),
+                "percent": round(process.memory_percent(), 2),
+            },
+            "system": {
+                "platform": platform.system(),
+                "platform_version": platform.version(),
+                "python_version": platform.python_version(),
+                "cpu_count": psutil.cpu_count(),
+                "total_memory_mb": round(psutil.virtual_memory().total / (1024 * 1024), 2),
+            },
         }
-    except Exception as e:
-        health["checks"]["whatsapp_manager"] = {"status": "error", "error": str(e)}
-
-    # Check LLM Router
-    try:
-        from backend.core.llm_router import llm_router
-        available_models = llm_router.get_available_models()
-        health["checks"]["llm_router"] = {
-            "status": "ok",
-            "available_models": len(available_models),
+    except Exception:
+        return {
+            "cpu_percent": None,
+            "memory": {"rss_mb": None, "vms_mb": None, "percent": None},
+            "system": {
+                "platform": platform.system(),
+                "platform_version": platform.version(),
+                "python_version": platform.python_version(),
+                "cpu_count": os.cpu_count(),
+                "total_memory_mb": None,
+            },
         }
+
+
+async def _check_async_db() -> dict:
+    """Check async database connectivity."""
+    try:
+        async with async_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return {"status": "healthy", "backend": "connected"}
     except Exception as e:
-        health["checks"]["llm_router"] = {"status": "error", "error": str(e)}
-
-    # Check Redis (if configured)
-    if settings.REDIS_URL:
-        try:
-            import aioredis
-            redis = aioredis.from_url(settings.REDIS_URL)
-            await redis.ping()
-            await redis.close()
-            health["checks"]["redis"] = {"status": "ok"}
-        except Exception as e:
-            health["checks"]["redis"] = {"status": "error", "error": str(e)}
-    else:
-        health["checks"]["redis"] = {"status": "not_configured"}
-
-    return health
+        return {"status": "unhealthy", "backend": str(e)}
 
 
-@router.get("/health/simple")
-async def simple_health():
-    """Health check simples (sem verificar dependências)."""
+@router.get("/health", summary="Quick health check")
+async def health_check():
+    """Quick health check for load balancers."""
     return {
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -81,17 +77,42 @@ async def simple_health():
     }
 
 
-@router.get("/health/ready")
-async def readiness_check(db: AsyncSession = Depends(get_db)):
-    """Readiness check para Kubernetes/Docker."""
-    try:
-        await db.execute(text("SELECT 1"))
-        return {"ready": True}
-    except Exception:
-        return {"ready": False}
+@router.get("/health/detailed", summary="Detailed system health")
+async def detailed_health():
+    """Detailed health check with system info, DB status, and uptime."""
+    db_health = await check_db_health()
+    async_db = await _check_async_db()
+    sys_info = _get_system_info()
+
+    overall = "healthy"
+    if db_health["status"] != "healthy" or async_db["status"] != "healthy":
+        overall = "degraded"
+
+    return {
+        "status": overall,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": settings.APP_VERSION,
+        "environment": settings.ENVIRONMENT,
+        "uptime_seconds": _get_uptime_seconds(),
+        "database": {
+            "sync": db_health,
+            "async": async_db,
+        },
+        "system": sys_info,
+    }
 
 
-@router.get("/health/live")
-async def liveness_check():
-    """Liveness check para Kubernetes/Docker."""
-    return {"alive": True}
+@router.get("/health/ready", summary="Readiness probe")
+async def readiness_probe():
+    """Kubernetes-style readiness probe."""
+    db_health = await check_db_health()
+    if not db_health:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Database not ready")
+    return {"status": "ready"}
+
+
+@router.get("/health/live", summary="Liveness probe")
+async def liveness_probe():
+    """Kubernetes-style liveness probe."""
+    return {"status": "alive"}
