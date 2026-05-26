@@ -1,8 +1,8 @@
 """
-Flora Admin Panel — Premium Dark Theme
-=======================================
-GitHub Dark-inspired premium color palette with Dracula accent colors.
-Complete design system: colors, typography, spacing, radius, shadows, animations.
+Flora Client App — Premium Dark Theme (Warm Edition)
+=====================================================
+Softer, warmer dark theme for the client-facing app.
+Same design system as admin but with friendlier, cuter aesthetic.
 """
 
 from kivy.utils import get_color_from_hex
@@ -10,66 +10,66 @@ from kivy.metrics import dp
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  COLOR PALETTE
+#  COLOR PALETTE (Warm Edition)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Colors:
     """
-    Premium dark color palette.
-    All colors stored as RGBA tuples for direct Kivy usage.
+    Warm, friendly dark color palette for the client app.
+    Softer tones, warmer accents for the "cute" aesthetic.
     """
 
     # ── Background Layers ─────────────────────────────────────────────────
-    BG_BASE         = get_color_from_hex("#0d1117")   # GitHub dark primary
-    BG_SECONDARY    = get_color_from_hex("#161b22")   # GitHub dark secondary
-    BG_CARD         = get_color_from_hex("#1c2128")   # Elevated card surface
-    BG_INPUT        = get_color_from_hex("#21262d")   # Input field background
-    BG_HOVER        = get_color_from_hex("#292e36")   # Hover state
-    BG_OVERLAY      = (0, 0, 0, 0.7)                  # Modal overlay
+    BG_BASE         = get_color_from_hex("#13111a")   # Deep warm purple-black
+    BG_SECONDARY    = get_color_from_hex("#1a1726")   # Slightly lighter
+    BG_CARD         = get_color_from_hex("#211d2e")   # Card surface
+    BG_INPUT        = get_color_from_hex("#282338")   # Input background
+    BG_HOVER        = get_color_from_hex("#2e2842")   # Hover state
+    BG_OVERLAY      = (0.07, 0.06, 0.1, 0.85)        # Modal overlay
 
-    # ── Accent Colors (Dracula-inspired) ──────────────────────────────────
-    PRIMARY         = get_color_from_hex("#ff79c6")   # Pink — primary accent
-    PRIMARY_DARK    = get_color_from_hex("#e86db0")   # Darker pink for pressed
-    PRIMARY_LIGHT   = get_color_from_hex("#ff9ad8")   # Lighter pink for hover
-    SECONDARY       = get_color_from_hex("#bd93f9")   # Purple — secondary accent
+    # ── Accent Colors (Warm Dracula) ─────────────────────────────────────
+    PRIMARY         = get_color_from_hex("#ff79c6")   # Pink — primary
+    PRIMARY_DARK    = get_color_from_hex("#e86db0")   # Darker pink
+    PRIMARY_LIGHT   = get_color_from_hex("#ff9ad8")   # Lighter pink
+    SECONDARY       = get_color_from_hex("#bd93f9")   # Purple — secondary
     SECONDARY_DARK  = get_color_from_hex("#a17be0")   # Darker purple
-    TERTIARY        = get_color_from_hex("#6272a4")   # Comment blue — subtle
+    TERTIARY        = get_color_from_hex("#6272a4")   # Comment blue
 
     # ── Text Colors ───────────────────────────────────────────────────────
     TEXT_PRIMARY    = get_color_from_hex("#f0f6fc")   # Near-white
-    TEXT_SECONDARY  = get_color_from_hex("#8b949e")   # Muted gray
-    TEXT_HINT       = get_color_from_hex("#484f58")   # Very muted
-    TEXT_DISABLED   = get_color_from_hex("#30363d")   # Disabled state
-    TEXT_ON_ACCENT  = get_color_from_hex("#0d1117")   # Text on accent bg
+    TEXT_SECONDARY  = get_color_from_hex("#9b8fb0")   # Warm muted purple-gray
+    TEXT_HINT       = get_color_from_hex("#5a4f6a")   # Very muted
+    TEXT_DISABLED   = get_color_from_hex("#3d3550")   # Disabled
+    TEXT_ON_ACCENT  = get_color_from_hex("#13111a")   # Text on accent bg
 
     # ── Semantic Colors ───────────────────────────────────────────────────
-    SUCCESS         = get_color_from_hex("#3fb950")   # Green
-    SUCCESS_LIGHT   = get_color_from_hex("#56d364")   # Light green
-    WARNING         = get_color_from_hex("#d29922")   # Yellow/amber
-    WARNING_LIGHT   = get_color_from_hex("#e3b341")   # Light yellow
-    ERROR           = get_color_from_hex("#f85149")   # Red
+    SUCCESS         = get_color_from_hex("#50fa7b")   # Bright green
+    SUCCESS_LIGHT   = get_color_from_hex("#6aff95")   # Light green
+    WARNING         = get_color_from_hex("#f1fa8c")   # Yellow
+    WARNING_LIGHT   = get_color_from_hex("#f5ffaa")   # Light yellow
+    ERROR           = get_color_from_hex("#ff5555")   # Bright red
     ERROR_LIGHT     = get_color_from_hex("#ff7b72")   # Light red
-    INFO            = get_color_from_hex("#58a6ff")   # Blue
-    INFO_LIGHT      = get_color_from_hex("#79c0ff")   # Light blue
+    INFO            = get_color_from_hex("#8be9fd")   # Cyan
+    INFO_LIGHT      = get_color_from_hex("#a4f1ff")   # Light cyan
 
-    # ── Legacy Aliases (for backward compatibility) ──────────────────────
-    HIGHLIGHT       = get_color_from_hex("#f85149")   # Maps to ERROR
-    BG_CARD_ALT     = get_color_from_hex("#1c2128")   # Maps to BG_CARD
+    # ── Legacy Aliases ───────────────────────────────────────────────────
+    HIGHLIGHT       = get_color_from_hex("#ff5555")   # Maps to ERROR
+    BG_CARD_ALT     = get_color_from_hex("#211d2e")   # Maps to BG_CARD
 
-    # ── Gradient Pairs (for premium buttons) ─────────────────────────────
+    # ── Gradient Pairs ───────────────────────────────────────────────────
     GRADIENT_PRIMARY   = [get_color_from_hex("#ff79c6"), get_color_from_hex("#bd93f9")]
-    GRADIENT_SUCCESS   = [get_color_from_hex("#3fb950"), get_color_from_hex("#56d364")]
-    GRADIENT_WARNING   = [get_color_from_hex("#d29922"), get_color_from_hex("#e3b341")]
-    GRADIENT_ERROR     = [get_color_from_hex("#f85149"), get_color_from_hex("#ff7b72")]
-    GRADIENT_INFO      = [get_color_from_hex("#58a6ff"), get_color_from_hex("#79c0ff")]
+    GRADIENT_SUCCESS   = [get_color_from_hex("#50fa7b"), get_color_from_hex("#6aff95")]
+    GRADIENT_WARNING   = [get_color_from_hex("#f1fa8c"), get_color_from_hex("#f5ffaa")]
+    GRADIENT_ERROR     = [get_color_from_hex("#ff5555"), get_color_from_hex("#ff7b72")]
+    GRADIENT_INFO      = [get_color_from_hex("#8be9fd"), get_color_from_hex("#a4f1ff")]
 
-    # ── Status-specific colors ───────────────────────────────────────────
-    STATUS_CONNECTED    = get_color_from_hex("#3fb950")
-    STATUS_DISCONNECTED = get_color_from_hex("#f85149")
-    STATUS_PENDING      = get_color_from_hex("#d29922")
-    STATUS_ERROR        = get_color_from_hex("#f85149")
-    STATUS_ACTIVE       = get_color_from_hex("#3fb950")
-    STATUS_INACTIVE     = get_color_from_hex("#484f58")
+    # ── Status Colors ────────────────────────────────────────────────────
+    STATUS_CONNECTED    = get_color_from_hex("#50fa7b")
+    STATUS_DISCONNECTED = get_color_from_hex("#ff5555")
+    STATUS_PENDING      = get_color_from_hex("#f1fa8c")
+    STATUS_ERROR        = get_color_from_hex("#ff5555")
+    STATUS_ACTIVE       = get_color_from_hex("#50fa7b")
+    STATUS_INACTIVE     = get_color_from_hex("#5a4f6a")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -77,12 +77,8 @@ class Colors:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Typography:
-    """
-    Typography scale using KivyMD font_style names + custom sizes.
-    All sizes in dp for consistent scaling.
-    """
+    """Typography scale — same as admin for consistency."""
 
-    # ── Font Sizes (dp) ──────────────────────────────────────────────────
     H1_SIZE = dp(32)
     H2_SIZE = dp(28)
     H3_SIZE = dp(24)
@@ -96,7 +92,6 @@ class Typography:
     OVERLINE = dp(10)
     BUTTON = dp(14)
 
-    # ── Font Styles (KivyMD mapping) ─────────────────────────────────────
     H1 = "H1"
     H2 = "H2"
     H3 = "H3"
@@ -111,13 +106,11 @@ class Typography:
     OVERLINE_STYLE = "Overline"
     BUTTON_STYLE = "Button"
 
-    # ── Font Weights ─────────────────────────────────────────────────────
     WEIGHT_LIGHT = "300"
     WEIGHT_REGULAR = "400"
     WEIGHT_MEDIUM = "500"
     WEIGHT_BOLD = "bold"
 
-    # ── Letter Spacing ───────────────────────────────────────────────────
     SPACING_TIGHT = -0.5
     SPACING_NORMAL = 0
     SPACING_WIDE = 0.5
@@ -129,10 +122,7 @@ class Typography:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Spacing:
-    """
-    Consistent spacing scale. All values in dp.
-    Based on 4px grid system.
-    """
+    """Same spacing scale as admin."""
     XS   = dp(4)
     SM   = dp(8)
     MD   = dp(16)
@@ -141,7 +131,6 @@ class Spacing:
     XXL  = dp(48)
     XXXL = dp(64)
 
-    # ── Legacy aliases ───────────────────────────────────────────────────
     SPACE_XS   = dp(4)
     SPACE_SM   = dp(8)
     SPACE_MD   = dp(16)
@@ -156,21 +145,18 @@ class Spacing:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Radius:
-    """
-    Border radius scale. All values in dp.
-    """
+    """Slightly more rounded for friendlier feel."""
     NONE = 0
-    SM   = dp(8)
-    MD   = dp(12)
-    LG   = dp(16)
-    XL   = dp(24)
-    FULL = dp(9999)  # Pill/circle shape
+    SM   = dp(10)   # Slightly rounder than admin
+    MD   = dp(14)
+    LG   = dp(18)
+    XL   = dp(28)
+    FULL = dp(9999)
 
-    # ── Legacy aliases ───────────────────────────────────────────────────
-    RADIUS_SMALL  = dp(8)
-    RADIUS_MEDIUM = dp(12)
-    RADIUS_LARGE  = dp(16)
-    RADIUS_XL     = dp(24)
+    RADIUS_SMALL  = dp(10)
+    RADIUS_MEDIUM = dp(14)
+    RADIUS_LARGE  = dp(18)
+    RADIUS_XL     = dp(28)
     RADIUS_FULL   = dp(9999)
 
 
@@ -179,17 +165,12 @@ class Radius:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Elevation:
-    """
-    Shadow/elevation presets.
-    Maps to KivyMD elevation values.
-    """
     NONE   = 0
     LOW    = 2
     MEDIUM = 6
     HIGH   = 12
     XL     = 20
 
-    # ── Shadow color (for custom shadow implementations) ────────────────
     SHADOW_COLOR = (0, 0, 0, 0.3)
     SHADOW_COLOR_DEEP = (0, 0, 0, 0.5)
 
@@ -199,16 +180,12 @@ class Elevation:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Animation:
-    """
-    Animation timing constants (in seconds).
-    """
     INSTANT  = 0.0
     FAST     = 0.15
     NORMAL   = 0.3
     SLOW     = 0.5
     GLACIAL  = 0.8
 
-    # ── Easing curves ────────────────────────────────────────────────────
     EASE_IN = "in_cubic"
     EASE_OUT = "out_cubic"
     EASE_IN_OUT = "in_out_cubic"
@@ -221,63 +198,64 @@ class Animation:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ComponentTokens:
-    """
-    Design tokens specific to components.
-    """
+    """Component tokens — slightly rounder for client app."""
 
-    # ── Sidebar ───────────────────────────────────────────────────────────
-    SIDEBAR_WIDTH = dp(260)
-    SIDEBAR_COLLAPSED_WIDTH = dp(64)
-    SIDEBAR_ITEM_HEIGHT = dp(44)
-    SIDEBAR_ITEM_RADIUS = dp(12)
-    SIDEBAR_ICON_SIZE = dp(22)
-
-    # ── Top Bar ──────────────────────────────────────────────────────────
-    TOP_BAR_HEIGHT = dp(64)
-    TOP_BAR_PADDING_H = dp(20)
+    # ── Navigation ────────────────────────────────────────────────────────
+    NAV_BAR_HEIGHT = dp(64)
+    NAV_BAR_PADDING_H = dp(20)
 
     # ── Cards ────────────────────────────────────────────────────────────
     CARD_PADDING = dp(20)
     CARD_SPACING = dp(12)
     CARD_BORDER_WIDTH = dp(1)
-    CARD_BORDER_COLOR = get_color_from_hex("#30363d")
+    CARD_BORDER_COLOR = get_color_from_hex("#2e2842")
 
     # ── Buttons ──────────────────────────────────────────────────────────
-    BUTTON_HEIGHT = dp(44)
+    BUTTON_HEIGHT = dp(48)
     BUTTON_HEIGHT_SM = dp(36)
-    BUTTON_HEIGHT_LG = dp(52)
-    BUTTON_RADIUS = dp(12)
+    BUTTON_HEIGHT_LG = dp(56)
+    BUTTON_RADIUS = dp(16)  # Rounder
     BUTTON_PADDING_H = dp(24)
 
     # ── Inputs ───────────────────────────────────────────────────────────
-    INPUT_HEIGHT = dp(48)
-    INPUT_RADIUS = dp(12)
+    INPUT_HEIGHT = dp(52)
+    INPUT_RADIUS = dp(16)
     INPUT_PADDING_H = dp(16)
 
     # ── Badges ───────────────────────────────────────────────────────────
-    BADGE_HEIGHT = dp(24)
-    BADGE_RADIUS = dp(12)
+    BADGE_HEIGHT = dp(26)
+    BADGE_RADIUS = dp(13)
     BADGE_PADDING_H = dp(12)
 
     # ── Avatars ──────────────────────────────────────────────────────────
-    AVATAR_SIZE_SM = dp(28)
-    AVATAR_SIZE_MD = dp(40)
-    AVATAR_SIZE_LG = dp(56)
+    AVATAR_SIZE_SM = dp(32)
+    AVATAR_SIZE_MD = dp(44)
+    AVATAR_SIZE_LG = dp(64)
 
     # ── FAB ──────────────────────────────────────────────────────────────
     FAB_SIZE = dp(56)
     FAB_SIZE_MINI = dp(40)
-    FAB_RADIUS = dp(16)
+    FAB_RADIUS = dp(18)
 
     # ── Modal ────────────────────────────────────────────────────────────
-    MODAL_WIDTH = dp(480)
-    MODAL_RADIUS = dp(20)
+    MODAL_WIDTH = dp(420)
+    MODAL_RADIUS = dp(24)
     MODAL_PADDING = dp(24)
 
     # ── Snackbar ─────────────────────────────────────────────────────────
-    SNACKBAR_RADIUS = dp(12)
+    SNACKBAR_RADIUS = dp(14)
     SNACKBAR_PADDING = dp(16)
     SNACKBAR_MARGIN = dp(16)
+
+    # ── Chat Bubbles ─────────────────────────────────────────────────────
+    BUBBLE_RADIUS = dp(18)
+    BUBBLE_PADDING_H = dp(14)
+    BUBBLE_PADDING_V = dp(10)
+    BUBBLE_MAX_WIDTH = 0.75  # % of parent width
+
+    # ── Bottom Nav ───────────────────────────────────────────────────────
+    BOTTOM_NAV_HEIGHT = dp(64)
+    BOTTOM_NAV_RADIUS = dp(20)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -285,12 +263,8 @@ class ComponentTokens:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Theme:
-    """
-    Legacy theme class for backward compatibility.
-    All existing code using Theme.XXX will continue to work.
-    """
+    """Legacy theme class for backward compatibility."""
 
-    # Colors (legacy names)
     BG_BASE         = Colors.BG_BASE
     BG_CARD         = Colors.BG_CARD
     BG_INPUT        = Colors.BG_INPUT
@@ -305,7 +279,6 @@ class Theme:
     HIGHLIGHT       = Colors.HIGHLIGHT
     INFO            = Colors.INFO
 
-    # Spacing (legacy names)
     SPACE_XS   = Spacing.XS
     SPACE_SM   = Spacing.SM
     SPACE_MD   = Spacing.MD
@@ -314,20 +287,17 @@ class Theme:
     SPACE_2XL  = Spacing.XXL
     SPACE_3XL  = Spacing.XXXL
 
-    # Radius (legacy names)
     RADIUS_SMALL  = Radius.SM
     RADIUS_MEDIUM = Radius.MD
     RADIUS_LARGE  = Radius.LG
     RADIUS_XL     = Radius.XL
     RADIUS_FULL   = Radius.FULL
 
-    # Elevation (legacy names)
     ELEVATION_NONE  = Elevation.NONE
     ELEVATION_LOW   = Elevation.LOW
     ELEVATION_MED   = Elevation.MEDIUM
     ELEVATION_HIGH  = Elevation.HIGH
 
-    # Animation (legacy names)
     ANIM_FAST   = Animation.FAST
     ANIM_NORMAL = Animation.NORMAL
     ANIM_SLOW   = Animation.SLOW
@@ -345,23 +315,13 @@ def hex_to_rgba(hex_color: str, alpha: float = 1.0) -> tuple:
 def lighten(color: tuple, amount: float = 0.1) -> tuple:
     """Lighten an RGBA color by a given amount (0-1)."""
     r, g, b, a = color[:4]
-    return (
-        min(1.0, r + amount),
-        min(1.0, g + amount),
-        min(1.0, b + amount),
-        a,
-    )
+    return (min(1.0, r + amount), min(1.0, g + amount), min(1.0, b + amount), a)
 
 
 def darken(color: tuple, amount: float = 0.1) -> tuple:
     """Darken an RGBA color by a given amount (0-1)."""
     r, g, b, a = color[:4]
-    return (
-        max(0.0, r - amount),
-        max(0.0, g - amount),
-        max(0.0, b - amount),
-        a,
-    )
+    return (max(0.0, r - amount), max(0.0, g - amount), max(0.0, b - amount), a)
 
 
 def with_alpha(color: tuple, alpha: float) -> tuple:

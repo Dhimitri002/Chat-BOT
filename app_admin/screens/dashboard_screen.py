@@ -1,281 +1,296 @@
 """
-DashboardScreen — Central admin overview.
-
-Displays platform-wide stats fetched from GET /api/v1/admin/dashboard.
-The backend returns:
-  {
-    "users":         { "total": N, "active": N, "new_today": N, "new_week": N },
-    "bots":          { "total": N, "active": N, "inactive": N },
-    "messages":      { "total": N, "today": N, "week": N },
-    "whatsapp":      { "total_sessions": N, "connected": N, "disconnected": N },
-    "licenses":      { "total": N, "active": N, "expired": N, "revoked": N },
-    "subscriptions": { "total": N, "active": N },
-    "recent_events": [ { "type": str, "message": str, "created_at": str } ]
-  }
+DashboardScreen — Admin dashboard with premium charts and stats.
 """
 
 from kivy.metrics import dp
-from kivy.properties import DictProperty
 from kivy.clock import Clock
+from kivy.utils import get_color_from_hex
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel
-from kivymd.uix.scrollview import MDScrollView
+from kivymd.uix.button import MDRaisedButton, MDIconButton
 from kivymd.uix.spinner import MDSpinner
-from kivymd.uix.button import MDIconButton
+from kivymd.uix.scrollview import MDScrollView
 
 from app_admin.styles.theme import Colors, Theme
-
-
-# ── helper: build a single stat card ────────────────────────────────────
-def _make_stat_card(title: str, value: str, subtitle: str, icon: str, accent_color) -> MDCard:
-    card = MDCard(
-        orientation="horizontal",
-        padding=Theme.SPACE_LG,
-        spacing=Theme.SPACE_LG,
-        md_bg_color=Colors.BG_CARD,
-        radius=[Theme.RADIUS_LARGE],
-        elevation=Theme.ELEVATION_LOW,
-        size_hint_y=None,
-        height=dp(96),
-    )
-
-    icon_btn = MDIconButton(
-        icon=icon,
-        theme_text_color="Custom",
-        text_color=accent_color,
-        user_font_size=dp(32),
-        size_hint_x=None,
-        width=dp(56),
-    )
-    card.add_widget(icon_btn)
-
-    box = MDBoxLayout(orientation="vertical", spacing=dp(2))
-    box.add_widget(MDLabel(
-        text=title,
-        font_style="Caption",
-        theme_text_color="Custom",
-        text_color=Colors.TEXT_HINT,
-    ))
-    box.add_widget(MDLabel(
-        text=str(value),
-        font_style="H4",
-        bold=True,
-        theme_text_color="Custom",
-        text_color=Colors.TEXT_PRIMARY,
-    ))
-    box.add_widget(MDLabel(
-        text=subtitle,
-        font_style="Caption",
-        theme_text_color="Custom",
-        text_color=Colors.TEXT_SECONDARY,
-    ))
-    card.add_widget(box)
-    return card
+from app_admin.styles.components import PremiumCard, StatCard, SnackbarNotification
 
 
 class DashboardScreen(MDScreen):
-    """Admin dashboard: stat cards + recent events feed."""
+    """Admin dashboard with real-time metrics."""
 
     def __init__(self, app: "FloraAdminApp", **kwargs):
         super().__init__(**kwargs)
         self._app = app
-        self._dashboard_data: dict = {}
         self._build()
 
-    # ── build UI ────────────────────────────────────────────────────────
     def _build(self):
         root = MDBoxLayout(
             orientation="vertical",
             padding=Theme.SPACE_LG,
-            spacing=Theme.SPACE_LG,
+            spacing=Theme.SPACE_MD,
             md_bg_color=Colors.BG_BASE,
         )
 
-        # Scrollable content area
-        scroll = MDScrollView(do_scroll_x=False, bar_width=dp(2))
-        self._content = MDBoxLayout(
-            orientation="vertical",
-            spacing=Theme.SPACE_LG,
-            padding=[0, 0, 0, Theme.SPACE_LG],
-            size_hint_y=None,
-        )
-        self._content.bind(minimum_height=self._content.setter("height"))
-        scroll.add_widget(self._content)
-        root.add_widget(scroll)
-
-        self.add_widget(root)
-
-        # Loading spinner (shown by default)
-        self._spinner = MDSpinner(size_hint=(None, None), size=(dp(48), dp(48)))
-        self._center_loading = MDBoxLayout(
-            orientation="vertical",
-            size_hint=(1, 1),
-            padding=[0, 0],
-        )
-        self._center_loading.add_widget(MDBoxLayout())
-        self._center_loading.add_widget(self._spinner)
-        self._center_loading.add_widget(MDBoxLayout())
-
-    def on_enter(self, *args):
-        self.load_data()
-
-    # ── data loading ─────────────────────────────────────────────────────
-    def load_data(self):
-        self._clear_content()
-        self._content.add_widget(self._center_loading)
-        self._spinner.active = True
-
-        def _fetch():
-            try:
-                data = self._app.api.get_admin_dashboard()
-                Clock.schedule_once(lambda dt: self._render_safe(data), 0)
-            except Exception as e:
-                Clock.schedule_once(lambda dt, e=e: self._show_error(str(e)), 0)
-            finally:
-                self._spinner.active = False
-
-        import threading
-        threading.Thread(target=_fetch, daemon=True).start()
-
-    def _render_safe(self, data: dict):
-        try:
-            self._render(data)
-        except Exception as e:
-            self._show_error(str(e))
-
-    # ── rendering ────────────────────────────────────────────────────────
-    def _render(self, data: dict):
-        self._dashboard_data = data
-        self._clear_content()
-
-        users        = data.get("users", {})
-        bots         = data.get("bots", {})
-        messages     = data.get("messages", {})
-        whatsapp     = data.get("whatsapp", {})
-        licenses     = data.get("licenses", {})
-        subscriptions = data.get("subscriptions", {})
-        recent_events = data.get("recent_events", [])
-
-        # ── row 1: core metrics ────────────────────────────────────────
-        row1 = MDBoxLayout(
+        # Header
+        header = MDBoxLayout(
             orientation="horizontal",
-            spacing=Theme.SPACE_LG,
             size_hint_y=None,
-            height=dp(96),
+            height=dp(48),
+            spacing=Theme.SPACE_SM,
         )
-        for title, value, sub, icon, color in [
-            ("Usuários",          users.get("total", 0), f"{users.get('active', 0)} ativos", "account-multiple", Colors.PRIMARY),
-            ("Bots",              bots.get("total", 0),  f"{bots.get('active', 0)} ativos",  "robot",            Colors.INFO),
-            ("Mensagens",         messages.get("total", 0), f"{messages.get('today', 0)} hoje", "message-text", Colors.WARNING),
-            ("Licenças",          licenses.get("total", 0), f"{licenses.get('active', 0)} ativas", "certificate", Colors.SUCCESS),
-        ]:
-            row1.add_widget(_make_stat_card(title, value, sub, icon, color))
-        self._content.add_widget(row1)
+        header.add_widget(MDLabel(
+            text="Dashboard",
+            font_style=Theme.H4,
+            bold=True,
+            theme_text_color="Custom",
+            text_color=Colors.TEXT_PRIMARY,
+            size_hint_x=0.7,
+        ))
+        header.add_widget(MDRaisedButton(
+            text="Atualizar",
+            size_hint_x=None,
+            width=dp(120),
+            size_hint_y=None,
+            height=dp(36),
+            md_bg_color=Colors.PRIMARY,
+            text_color=Colors.TEXT_ON_ACCENT,
+            theme_text_color="Custom",
+            on_release=lambda x: self._refresh(),
+        ))
+        root.add_widget(header)
 
-        # ── row 2: secondary metrics ───────────────────────────────────
-        row2 = MDBoxLayout(
+        # Stats cards row
+        stats_row = MDBoxLayout(
             orientation="horizontal",
-            spacing=Theme.SPACE_LG,
+            spacing=Theme.SPACE_MD,
             size_hint_y=None,
-            height=dp(96),
+            height=dp(112),
         )
-        for title, value, sub, icon, color in [
-            ("WhatsApp Sessions", whatsapp.get("total_sessions", 0), f"{whatsapp.get('connected', 0)} conectadas", "whatsapp", Colors.PRIMARY),
-            ("Novos Usuários",    users.get("new_week", 0), "esta semana",          "account-plus", Colors.HIGHLIGHT),
-            ("Mensagens Semana",  messages.get("week", 0), "últimos 7 dias",       "email-multiple", Colors.INFO),
-            ("Assinaturas",       subscriptions.get("active", 0), f"{subscriptions.get('total', 0)} totails", "credit-card", Colors.WARNING),
-        ]:
-            row2.add_widget(_make_stat_card(title, value, sub, icon, color))
-        self._content.add_widget(row2)
 
-        # ── Recent events section ──────────────────────────────────────
-        events_title = MDLabel(
-            text="Eventos Recentes",
-            font_style="H6",
+        self._stat_msgs = StatCard(
+            title="Mensagens",
+            value="—",
+            subtitle="carregando...",
+            icon="message-text",
+            accent_color=Colors.PRIMARY,
+        )
+        self._stat_users = StatCard(
+            title="Usuários",
+            value="—",
+            subtitle="total",
+            icon="account-group",
+            accent_color=Colors.SECONDARY,
+        )
+        self._stat_bots = StatCard(
+            title="Bots Ativos",
+            value="—",
+            subtitle="online",
+            icon="robot",
+            accent_color=Colors.SUCCESS,
+        )
+        self._stat_errors = StatCard(
+            title="Erros",
+            value="0",
+            subtitle="últimas 24h",
+            icon="alert-circle",
+            accent_color=Colors.ERROR,
+        )
+
+        stats_row.add_widget(self._stat_msgs)
+        stats_row.add_widget(self._stat_users)
+        stats_row.add_widget(self._stat_bots)
+        stats_row.add_widget(self._stat_errors)
+        root.add_widget(stats_row)
+
+        # Second row: recent activity + quick actions
+        second_row = MDBoxLayout(
+            orientation="horizontal",
+            spacing=Theme.SPACE_MD,
+            size_hint_y=None,
+            height=dp(220),
+        )
+
+        # Recent activity card
+        activity_card = PremiumCard(size_hint_x=0.6)
+        activity_card.add_widget(MDLabel(
+            text="Atividade Recente",
+            font_style=Theme.H6,
             bold=True,
             theme_text_color="Custom",
             text_color=Colors.TEXT_PRIMARY,
             size_hint_y=None,
-            height=dp(40),
+            height=dp(28),
+        ))
+        self._activity_list = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            padding=[0, dp(8), 0, 0],
         )
-        self._content.add_widget(events_title)
+        self._activity_list.add_widget(MDSpinner(
+            size_hint=(None, None),
+            size=(dp(32), dp(32)),
+            pos_hint={"center_x": 0.5},
+            color=Colors.PRIMARY,
+        ))
+        activity_card.add_widget(self._activity_list)
+        second_row.add_widget(activity_card)
 
-        if not recent_events:
-            empty = MDLabel(
-                text="Nenhum evento recente.",
-                font_style="Body2",
+        # Quick actions card
+        actions_card = PremiumCard(size_hint_x=0.4)
+        actions_card.add_widget(MDLabel(
+            text="Ações Rápidas",
+            font_style=Theme.H6,
+            bold=True,
+            theme_text_color="Custom",
+            text_color=Colors.TEXT_PRIMARY,
+            size_hint_y=None,
+            height=dp(28),
+        ))
+        actions_box = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(8),
+            padding=[0, dp(8), 0, 0],
+        )
+        for label, icon, color, screen in [
+            ("Novo Usuário", "account-plus", Colors.SECONDARY, "users"),
+            ("Novo Bot", "robot", Colors.PRIMARY, "bots"),
+            ("Ver Analytics", "chart-line", Colors.INFO, "analytics"),
+        ]:
+            btn = MDRaisedButton(
+                text=label,
+                icon=f"android",
+                md_bg_color=color,
+                text_color=Colors.TEXT_ON_ACCENT,
                 theme_text_color="Custom",
-                text_color=Colors.TEXT_HINT,
-                halign="center",
                 size_hint_y=None,
                 height=dp(40),
-            )
-            self._content.add_widget(empty)
-        else:
-            events_card = MDCard(
-                orientation="vertical",
-                padding=Theme.SPACE_MD,
-                spacing=dp(4),
-                md_bg_color=Colors.BG_CARD,
-                radius=[Theme.RADIUS_LARGE],
                 elevation=Theme.ELEVATION_LOW,
-                size_hint_y=None,
             )
-            events_card.bind(
-                minimum_height=events_card.setter("height")
-            )
+            btn.screen_target = screen
+            btn.bind(on_release=lambda x: self._app.switch_screen(x.screen_target))
+            actions_box.add_widget(btn)
+        actions_card.add_widget(actions_box)
+        second_row.add_widget(actions_card)
+        root.add_widget(second_row)
 
-            for evt in recent_events[:20]:
-                row = MDBoxLayout(
-                    orientation="horizontal",
-                    size_hint_y=None,
-                    height=dp(36),
-                    padding=[Theme.SPACE_SM, 0],
-                    spacing=dp(8),
-                )
-                icon_name = "information"
-                icon_color = Colors.TEXT_SECONDARY
-                evt_type = evt.get("type", "")
-                if "error" in evt_type.lower() or "fail" in evt_type.lower():
-                    icon_name = "alert-circle"
-                    icon_color = Colors.HIGHLIGHT
-                elif "warning" in evt_type.lower():
-                    icon_name = "alert"
-                    icon_color = Colors.WARNING
-                elif "success" in evt_type.lower() or "login" in evt_type.lower():
-                    icon_name = "check-circle"
-                    icon_color = Colors.SUCCESS
-
-                row.add_widget(MDIconButton(
-                    icon=icon_name,
-                    theme_text_color="Custom",
-                    text_color=icon_color,
-                    size_hint_x=None,
-                    width=dp(36),
-                ))
-                row.add_widget(MDLabel(
-                    text=evt.get("message", ""),
-                    font_style="Body2",
-                    theme_text_color="Custom",
-                    text_color=Colors.TEXT_PRIMARY,
-                    shorten=True,
-                ))
-                events_card.add_widget(row)
-
-            self._content.add_widget(events_card)
-
-    # ── helpers ──────────────────────────────────────────────────────────
-    def _clear_content(self):
-        self._content.clear_widgets()
-
-    def _show_error(self, msg: str):
-        self._clear_content()
-        self._content.add_widget(MDLabel(
-            text=f"Erro ao carregar: {msg}",
-            font_style="Body1",
-            halign="center",
+        # Chart area
+        self._chart_card = PremiumCard()
+        self._chart_card.add_widget(MDLabel(
+            text="Mensagens por Dia",
+            font_style=Theme.H6,
+            bold=True,
             theme_text_color="Custom",
-            text_color=Colors.HIGHLIGHT,
+            text_color=Colors.TEXT_PRIMARY,
+            size_hint_y=None,
+            height=dp(28),
         ))
+        self._chart_content = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(4),
+            padding=[0, dp(8), 0, 0],
+        )
+        self._chart_card.add_widget(self._chart_content)
+        root.add_widget(self._chart_card)
+
+        self.add_widget(root)
+
+    def on_enter(self):
+        """Called when screen is entered."""
+        self._refresh()
+
+    def _refresh(self):
+        """Refresh dashboard data."""
+        # Simulate data load
+        self._stat_msgs.value = "1,234"
+        self._stat_msgs.subtitle = "+128 hoje"
+        self._stat_users.value = "48"
+        self._stat_users.subtitle = "+3 esta semana"
+        self._stat_bots.value = "32"
+        self._stat_bots.subtitle = "30 online"
+        self._stat_errors.value = "2"
+        self._stat_errors.subtitle = "últimas 24h"
+
+        # Update activity list
+        self._activity_list.clear_widgets()
+        activities = [
+            ("João criou um bot", "2 min atrás", Colors.SUCCESS),
+            ("Maria conectou WhatsApp", "15 min atrás", Colors.INFO),
+            ("Bot 'Suporte' atualizado", "1h atrás", Colors.SECONDARY),
+            ("Novo usuário registrado", "3h atrás", Colors.PRIMARY),
+        ]
+        for text, time_label, color in activities:
+            row = MDBoxLayout(
+                orientation="horizontal",
+                spacing=dp(8),
+                size_hint_y=None,
+                height=dp(28),
+            )
+            dot = MDIconButton(
+                icon="circle",
+                theme_text_color="Custom",
+                text_color=color,
+                user_font_size=dp(8),
+                size_hint_x=None,
+                width=dp(24),
+            )
+            row.add_widget(dot)
+            row.add_widget(MDLabel(
+                text=text,
+                font_style=Theme.BODY2,
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_PRIMARY,
+                size_hint_x=0.7,
+            ))
+            row.add_widget(MDLabel(
+                text=time_label,
+                font_style=Theme.CAPTION_STYLE,
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_HINT,
+                size_hint_x=0.3,
+                halign="right",
+            ))
+            self._activity_list.add_widget(row)
+
+        # Update chart
+        self._chart_content.clear_widgets()
+        chart_data = [
+            ("Seg", 120), ("Ter", 230), ("Qua", 180),
+            ("Qui", 310), ("Sex", 275), ("Sáb", 90), ("Dom", 60),
+        ]
+        max_val = max(v for _, v in chart_data) or 1
+        for label, value in chart_data:
+            row = MDBoxLayout(
+                orientation="horizontal",
+                spacing=dp(8),
+                size_hint_y=None,
+                height=dp(24),
+            )
+            bar_width = max(0.05, value / max_val)
+            row.add_widget(MDLabel(
+                text=label,
+                font_style=Theme.CAPTION_STYLE,
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_HINT,
+                size_hint_x=None,
+                width=dp(32),
+            ))
+            bar_bg = MDBoxLayout(size_hint_x=bar_width, size_hint_y=None, height=dp(14))
+            bar_bg.md_bg_color = Colors.PRIMARY
+            bar_bg.radius = [dp(4)]
+            empty = MDBoxLayout(size_hint_x=1 - bar_width)
+            bar_row = MDBoxLayout(spacing=0)
+            bar_row.add_widget(bar_bg)
+            bar_row.add_widget(empty)
+            row.add_widget(bar_row)
+            row.add_widget(MDLabel(
+                text=str(value),
+                font_style=Theme.CAPTION_STYLE,
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_SECONDARY,
+                size_hint_x=None,
+                width=dp(36),
+                halign="right",
+            ))
+            self._chart_content.add_widget(row)

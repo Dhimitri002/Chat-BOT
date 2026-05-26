@@ -156,7 +156,7 @@ class AuthService:
     def get_user_display_name(self) -> str:
         """Get the display name of the current user."""
         if self._current_user:
-            return self._current_user.get("full_name", "Admin")
+            return self._current_user.get("name", "Admin")
         return "Administrador"
 
     def get_user_email(self) -> str:

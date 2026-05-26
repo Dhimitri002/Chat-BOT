@@ -20,10 +20,10 @@ import hmac
 import io
 import json
 import logging
-import os
 import time
 import uuid
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -58,26 +58,18 @@ class WhatsAppConfig(BaseModel):
     session_id: str
     bot_id: str
     phone_number: Optional[str] = None
-    auth_dir: str = Field(default=".wa_sessions")
+    auth_dir: str = ".wa_sessions"
     max_retries: int = 5
     retry_base_delay: float = 2.0
     retry_max_delay: float = 60.0
     ping_interval: int = 30
-    request_timeout: int = 30
+    request_timeout: int = 15
+    connector_url: str = "http://127.0.0.1:3001"
     webhook_url: Optional[str] = None
-    webhook_secret: Optional[str] = None
-
-
-class QRCodeData(BaseModel):
-    """QR code response model."""
-    qr_code: str  # base64-encoded PNG image
-    qr_string: str  # raw QR string from WhatsApp Web
-    expires_at: datetime
-    session_id: str
 
 
 class ConnectionStatus(BaseModel):
-    """Full connection status response."""
+    """Full status of a WhatsApp connection."""
     session_id: str
     bot_id: str
     state: ConnectionState
@@ -85,15 +77,27 @@ class ConnectionStatus(BaseModel):
     push_name: Optional[str] = None
     battery_level: Optional[int] = None
     plugged_in: Optional[bool] = None
-    last_seen: Optional[datetime] = None
     connected_at: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    last_qr_update: Optional[datetime] = None
     retry_count: int = 0
-    qr_code: Optional[str] = None
+    qr_code: Optional[str] = None  # base64 PNG
+    qr_string: Optional[str] = None
+    error_message: Optional[str] = None
+    messages_sent: int = 0
+    messages_received: int = 0
+
+
+class QRCodeData(BaseModel):
+    """QR code data for WhatsApp Web authentication."""
+    qr_code: str  # base64-encoded PNG
+    qr_string: str  # raw QR string
+    expires_at: datetime
 
 
 class OutgoingMessage(BaseModel):
-    """An outgoing WhatsApp message."""
-    to: str  # phone number in international format (e.g. "5511999999999")
+    """A message to send via WhatsApp."""
+    to: str
     text: Optional[str] = None
     media_url: Optional[str] = None
     media_type: Optional[str] = None  # image, video, audio, document
@@ -129,6 +133,146 @@ class SendResult(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+# ─── Exponential Backoff ────────────────────────────────────────────
+
+class ExponentialBackoff:
+    """Exponential backoff with jitter for reconnection attempts."""
+
+    def __init__(self, base: float = 2.0, max_delay: float = 60.0):
+        self.base = base
+        self.max_delay = max_delay
+        self._attempt = 0
+
+    def next_delay(self) -> float:
+        delay = min(self.base * (2 ** self._attempt), self.max_delay)
+        self._attempt += 1
+        # Add jitter (+/- 25%)
+        import random
+        jitter = delay * 0.25 * (2 * random.random() - 1)
+        return max(0.5, delay + jitter)
+
+    def reset(self):
+        self._attempt = 0
+
+    @property
+    def attempt(self) -> int:
+        return self._attempt
+
+
+# ─── Rate Limiter ───────────────────────────────────────────────────
+
+class RateLimiter:
+    """
+    Per-recipient rate limiter.
+    Allows N messages per window per recipient, plus global rate limiting.
+    """
+
+    def __init__(
+        self,
+        max_per_recipient_per_minute: int = 15,
+        max_global_per_minute: int = 60,
+        max_per_recipient_burst: int = 5,
+    ):
+        self.max_per_recipient = max_per_recipient_per_minute
+        self.max_global = max_global_per_minute
+        self.max_burst = max_per_recipient_burst
+        self._recipient_timestamps: dict[str, list[float]] = defaultdict(list)
+        self._global_timestamps: list[float] = []
+
+    def _cleanup(self, timestamps: list[float], window: float = 60.0):
+        now = time.time()
+        cutoff = now - window
+        while timestamps and timestamps[0] < cutoff:
+            timestamps.pop(0)
+
+    async def acquire(self, recipient: str) -> bool:
+        """
+        Try to acquire permission to send.
+        Returns True if allowed, False if rate limited.
+        """
+        now = time.time()
+
+        # Cleanup old entries
+        self._cleanup(self._global_timestamps)
+        self._cleanup(self._recipient_timestamps[recipient])
+
+        # Check global rate
+        if len(self._global_timestamps) >= self.max_global:
+            logger.warning("Global rate limit hit (%d msg/min)", self.max_global)
+            return False
+
+        # Check per-recipient rate
+        if len(self._recipient_timestamps[recipient]) >= self.max_per_recipient:
+            logger.warning(
+                "Rate limit hit for recipient %s (%d msg/min)",
+                recipient, self.max_per_recipient,
+            )
+            return False
+
+        # Allow burst (within 5 seconds) up to max_burst
+        if self._recipient_timestamps[recipient]:
+            recent = sum(
+                1 for t in self._recipient_timestamps[recipient]
+                if now - t < 5
+            )
+            if recent >= self.max_burst:
+                logger.warning("Burst limit hit for recipient %s", recipient)
+                return False
+
+        # Record the send
+        self._global_timestamps.append(now)
+        self._recipient_timestamps[recipient].append(now)
+        return True
+
+    def get_wait_time(self, recipient: str) -> float:
+        """Get the seconds to wait before sending to this recipient."""
+        self._cleanup(self._recipient_timestamps[recipient])
+        if len(self._recipient_timestamps[recipient]) < self.max_per_recipient:
+            return 0.0
+        # Wait until the oldest message in the window expires
+        oldest = self._recipient_timestamps[recipient][0]
+        return max(0.0, 60.0 - (time.time() - oldest))
+
+
+# ─── Connection Log ─────────────────────────────────────────────────
+
+class ConnectionLog:
+    """Thread-safe connection event log for debugging."""
+
+    def __init__(self, max_entries: int = 500):
+        self._entries: list[dict] = []
+        self._max_entries = max_entries
+        self._lock = asyncio.Lock()
+
+    async def add(self, event_type: str, message: str, details: Optional[dict] = None):
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": event_type,
+            "message": message,
+            "details": details or {},
+        }
+        async with self._lock:
+            self._entries.append(entry)
+            if len(self._entries) > self._max_entries:
+                self._entries = self._entries[-self._max_entries:]
+        logger.debug("[ConnLog] %s: %s", event_type, message)
+
+    async def get_entries(
+        self,
+        limit: int = 100,
+        event_type: Optional[str] = None,
+    ) -> list[dict]:
+        async with self._lock:
+            entries = self._entries[:]
+        if event_type:
+            entries = [e for e in entries if e["type"] == event_type]
+        return entries[-limit:]
+
+    async def clear(self):
+        async with self._lock:
+            self._entries.clear()
+
+
 # ─── Session Store ──────────────────────────────────────────────────
 
 class SessionStore:
@@ -152,19 +296,18 @@ class SessionStore:
         path = self._session_path(session_id)
         path.mkdir(parents=True, exist_ok=True)
         creds_file = path / "creds.json"
-        creds_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        logger.info("Saved auth state for session %s", session_id)
+        creds_file.write_text(json.dumps(state, indent=2))
+        logger.debug("Auth state saved for session %s", session_id)
 
     def load_auth_state(self, session_id: str) -> Optional[dict]:
         """Load authentication state from disk."""
         creds_file = self._session_path(session_id) / "creds.json"
         if creds_file.exists():
             try:
-                data = json.loads(creds_file.read_text(encoding="utf-8"))
-                logger.info("Loaded auth state for session %s", session_id)
-                return data
-            except (json.JSONDecodeError, IOError) as e:
-                logger.warning("Failed to load auth state for %s: %s", session_id, e)
+                return json.loads(creds_file.read_text())
+            except (json.JSONDecodeError, IOError):
+                logger.warning("Could not load creds for session %s", session_id)
+                return None
         return None
 
     def save_metadata(self, session_id: str, metadata: dict) -> None:
@@ -172,233 +315,270 @@ class SessionStore:
         path = self._session_path(session_id)
         path.mkdir(parents=True, exist_ok=True)
         meta_file = path / "metadata.json"
-        meta_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        existing = {}
+        if meta_file.exists():
+            try:
+                existing = json.loads(meta_file.read_text())
+            except (json.JSONDecodeError, IOError):
+                pass
+        existing.update(metadata)
+        meta_file.write_text(json.dumps(existing, indent=2))
 
     def load_metadata(self, session_id: str) -> Optional[dict]:
         """Load session metadata."""
         meta_file = self._session_path(session_id) / "metadata.json"
         if meta_file.exists():
             try:
-                return json.loads(meta_file.read_text(encoding="utf-8"))
+                return json.loads(meta_file.read_text())
             except (json.JSONDecodeError, IOError):
                 return None
         return None
 
     def delete_session(self, session_id: str) -> None:
-        """Delete all session data."""
+        """Remove all session data."""
         import shutil
         path = self._session_path(session_id)
         if path.exists():
-            shutil.rmtree(path, ignore_errors=True)
-            logger.info("Deleted session data for %s", session_id)
+            shutil.rmtree(path)
+            logger.info("Session data deleted: %s", session_id)
 
     def list_sessions(self) -> list[str]:
-        """List all session IDs with stored auth state."""
+        """List all stored session IDs."""
         sessions = []
         if self.auth_dir.exists():
-            for entry in self.auth_dir.iterdir():
-                if entry.is_dir() and (entry / "creds.json").exists():
-                    sessions.append(entry.name)
+            for item in self.auth_dir.iterdir():
+                if item.is_dir() and (item / "creds.json").exists():
+                    sessions.append(item.name)
         return sessions
 
 
-# ─── Reconnection Policy ────────────────────────────────────────────
+# ─── WebSocket Notifier ─────────────────────────────────────────────
 
-class ReconnectPolicy:
-    """Exponential backoff reconnection policy."""
+class WebSocketNotifier:
+    """
+    Broadcasts WhatsApp events to connected WebSocket clients.
+    Used to push real-time updates to the admin and client apps.
+    """
 
-    def __init__(self, max_retries: int = 5, base_delay: float = 2.0, max_delay: float = 60.0):
-        self.max_retries = max_retries
-        self.base_delay = base_delay
-        self.max_delay = max_delay
-        self._retry_count = 0
+    def __init__(self):
+        self._connections: dict[str, list] = defaultdict(list)  # bot_id -> [ws]
+        self._global: list = []  # global listeners (admin dashboard)
+        self._lock = asyncio.Lock()
 
-    @property
-    def retry_count(self) -> int:
-        return self._retry_count
+    async def register(self, websocket, bot_id: Optional[str] = None):
+        async with self._lock:
+            if bot_id:
+                self._connections[bot_id].append(websocket)
+            else:
+                self._global.append(websocket)
+        logger.debug(
+            "WebSocket registered (bot=%s, total_bot=%d, global=%d)",
+            bot_id, len(self._connections.get(bot_id, [])), len(self._global),
+        )
 
-    @property
-    def delay(self) -> float:
-        """Calculate delay with exponential backoff and jitter."""
-        import random
-        exp_delay = self.base_delay * (2 ** self._retry_count)
-        jitter = random.uniform(0, 1)
-        return min(exp_delay + jitter, self.max_delay)
+    async def unregister(self, websocket, bot_id: Optional[str] = None):
+        async with self._lock:
+            if bot_id and bot_id in self._connections:
+                self._connections[bot_id] = [
+                    ws for ws in self._connections[bot_id] if ws != websocket
+                ]
+            self._global = [ws for ws in self._global if ws != websocket]
 
-    def increment(self) -> float:
-        """Increment retry count and return the delay."""
-        self._retry_count += 1
-        return self.delay
+    async def _safe_send(self, websocket, data: dict) -> bool:
+        try:
+            await websocket.send_json(data)
+            return True
+        except Exception:
+            return False
 
-    def reset(self) -> None:
-        self._retry_count = 0
+    async def broadcast_status(self, bot_id: str, status: ConnectionStatus):
+        """Broadcast a connection status update."""
+        payload = {
+            "type": "connection_status",
+            "bot_id": bot_id,
+            "data": {
+                "session_id": status.session_id,
+                "state": status.state.value,
+                "phone_number": status.phone_number,
+                "push_name": status.push_name,
+                "connected_at": status.connected_at.isoformat() if status.connected_at else None,
+                "last_seen": status.last_seen.isoformat() if status.last_seen else None,
+                "retry_count": status.retry_count,
+                "error_message": status.error_message,
+                "messages_sent": status.messages_sent,
+                "messages_received": status.messages_received,
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await self._broadcast(bot_id, payload)
 
-    @property
-    def exhausted(self) -> bool:
-        return self._retry_count >= self.max_retries
+    async def broadcast_qr(self, bot_id: str, qr_code: str, qr_string: str, expires_at: datetime):
+        """Broadcast a new QR code."""
+        payload = {
+            "type": "qr_code",
+            "bot_id": bot_id,
+            "data": {
+                "qr_code": qr_code,
+                "qr_string": qr_string,
+                "expires_at": expires_at.isoformat(),
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await self._broadcast(bot_id, payload)
+
+    async def broadcast_message(self, bot_id: str, message_data: dict):
+        """Broadcast an incoming/outgoing message."""
+        payload = {
+            "type": "message",
+            "bot_id": bot_id,
+            "data": message_data,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await self._broadcast(bot_id, payload)
+
+    async def _broadcast(self, bot_id: str, payload: dict):
+        """Send to all connections for a bot + global listeners."""
+        disconnected = []
+        async with self._lock:
+            targets = list(self._global)
+            targets.extend(self._connections.get(bot_id, []))
+
+        for ws in targets:
+            if not await self._safe_send(ws, payload):
+                disconnected.append((ws, bot_id))
+
+        # Clean up disconnected clients
+        for ws, bid in disconnected:
+            await self.unregister(ws, bid)
 
 
 # ─── WhatsApp Session Connection ────────────────────────────────────
 
 class WhatsAppSessionConnection:
     """
-    Manages a single WhatsApp Web session connection.
-
-    This connects to a remote WhatsApp connector (Node.js Baileys-based)
-    running as a subprocess or separate service, using HTTP/JSON to
-    communicate commands and receive events.
-
-    If USE_WHATSAPP_CONNECTOR=true, it spawns the Node.js connector
-    as a subprocess. Otherwise it uses the HTTP connector API directly.
+    Manages a single WhatsApp session connection.
+    Owns the lifecycle: connect -> receive -> respond -> disconnect.
     """
 
     def __init__(self, config: WhatsAppConfig):
-        self.config = config
         self.session_id = config.session_id
         self.bot_id = config.bot_id
-
-        self._state = ConnectionState.DISCONNECTED
-        self._qr_string: Optional[str] = None
-        self._qr_generated_at: Optional[float] = None
-        self._qr_ttl = 45.0  # QR codes expire after 45 seconds
-
+        self.config = config
+        self.state = ConnectionState.DISCONNECTED
         self._phone_number: Optional[str] = None
         self._push_name: Optional[str] = None
         self._battery_level: Optional[int] = None
         self._plugged_in: Optional[bool] = None
         self._connected_at: Optional[datetime] = None
         self._last_seen: Optional[datetime] = None
-
-        self._store = SessionStore(config.auth_dir)
-        self._reconnect_policy = ReconnectPolicy(
-            max_retries=config.max_retries,
-            base_delay=config.retry_base_delay,
-            max_delay=config.retry_max_delay,
-        )
-
+        self._last_qr_update: Optional[datetime] = None
+        self._qr_string: Optional[str] = None
+        self._qr_expires: Optional[datetime] = None
+        self._qr_expiry_task: Optional[asyncio.Task] = None
         self._http_client: Optional[httpx.AsyncClient] = None
-        self._connector_url: Optional[str] = None
-        self._process: Optional[Any] = None  # subprocess handle
-
-        self._message_callbacks: list[Callable] = []
-        self._status_callbacks: list[Callable] = []
-        self._running = False
+        self._reconnect_policy = ExponentialBackoff(
+            config.retry_base_delay, config.retry_max_delay
+        )
         self._poll_task: Optional[asyncio.Task] = None
+        self._health_task: Optional[asyncio.Task] = None
+        self._health_check_interval = config.ping_interval
+        self._store = SessionStore(config.auth_dir)
+        self._rate_limiter = RateLimiter()
+        self._log = ConnectionLog()
+        self._messages_sent = 0
+        self._messages_received = 0
+        self._error_message: Optional[str] = None
+        self._disconnect_event = asyncio.Event()
+        self._state_listeners: list[Callable] = []
+        self._lock = asyncio.Lock()
 
-    # ── Properties ──────────────────────────────────────────────
-
-    @property
-    def state(self) -> ConnectionState:
-        return self._state
-
-    @state.setter
-    def state(self, value: ConnectionState):
-        old = self._state
-        self._state = value
-        if old != value:
-            logger.info("Session %s state: %s -> %s", self.session_id, old, value)
-            self._notify_status_change()
+        # Connector URL from config
+        self._connector_url = getattr(settings, 'WHATSAPP_CONNECTOR_URL', None) or config.connector_url
 
     @property
     def status(self) -> ConnectionStatus:
-        qr_b64 = None
-        if self._state == ConnectionState.QR_WAITING and self._qr_expired:
-            qr_b64 = "expired"
-        elif self._qr_string and not self._qr_expired:
-            qr_b64 = self._generate_qr_base64(self._qr_string)
-
         return ConnectionStatus(
             session_id=self.session_id,
             bot_id=self.bot_id,
-            state=self._state,
+            state=self.state,
             phone_number=self._phone_number,
             push_name=self._push_name,
             battery_level=self._battery_level,
             plugged_in=self._plugged_in,
-            last_seen=self._last_seen,
             connected_at=self._connected_at,
-            retry_count=self._reconnect_policy.retry_count,
-            qr_code=qr_b64,
+            last_seen=self._last_seen,
+            last_qr_update=self._last_qr_update,
+            retry_count=self._reconnect_policy.attempt,
+            qr_code=self._generate_qr_image() if self._qr_string else None,
+            qr_string=self._qr_string,
+            error_message=self._error_message,
+            messages_sent=self._messages_sent,
+            messages_received=self._messages_received,
         )
 
     @property
-    def _qr_expired(self) -> bool:
-        if self._qr_generated_at is None:
-            return True
-        return (time.time() - self._qr_generated_at) > self._qr_ttl
+    def notifier(self) -> Optional[WebSocketNotifier]:
+        return self._notifier
 
-    # ── Callback Registration ──────────────────────────────────
+    @notifier.setter
+    def notifier(self, n: WebSocketNotifier):
+        self._notifier = n
 
-    def on_message(self, callback: Callable) -> None:
-        """Register a callback for incoming messages."""
-        self._message_callbacks.append(callback)
+    def _generate_qr_image(self) -> Optional[str]:
+        """Generate a base64 PNG from the current QR string."""
+        if not self._qr_string:
+            return None
+        try:
+            qr = qrcode.QRCode(version=1, box_size=10, border=4)
+            qr.add_data(self._qr_string)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+        except Exception as e:
+            logger.error("QR image generation failed: %s", e)
+            return None
 
-    def on_status_change(self, callback: Callable) -> None:
-        """Register a callback for connection status changes."""
-        self._status_callbacks.append(callback)
-
-    def _notify_message(self, message: IncomingMessage) -> None:
-        for cb in self._message_callbacks:
-            try:
-                if asyncio.iscoroutinefunction(cb):
-                    asyncio.create_task(cb(message))
-                else:
-                    cb(message)
-            except Exception as e:
-                logger.error("Message callback error: %s", e)
-
-    def _notify_status_change(self) -> None:
-        for cb in self._status_callbacks:
-            try:
-                if asyncio.iscoroutinefunction(cb):
-                    asyncio.create_task(cb(self.status))
-                else:
-                    cb(self.status)
-            except Exception as e:
-                logger.error("Status callback error: %s", e)
-
-    # ── QR Code Generation ──────────────────────────────────────
-
-    @staticmethod
-    def _generate_qr_base64(qr_string: str) -> str:
-        """Generate a base64-encoded PNG QR code from a string."""
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        qr.add_data(qr_string)
-        qr.make(fit=True)
-        img: PilImage = qr.make_image(fill_color="black", back_color="white")
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode("ascii")
-
-    def update_qr(self, qr_string: str) -> None:
-        """Update the current QR code string and generation timestamp."""
+    def update_qr(self, qr_string: str, expires_in: int = 60):
+        """Update the current QR code."""
         self._qr_string = qr_string
-        self._qr_generated_at = time.time()
-        logger.info("QR code updated for session %s", self.session_id)
+        self._qr_expires = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        self._last_qr_update = datetime.now(timezone.utc)
+        logger.info("QR code updated for session %s (expires in %ds)", self.session_id, expires_in)
 
     def generate_qr(self) -> QRCodeData:
-        """
-        Generate a QR code image from the current QR string.
-        Raises if no QR string available or if it has expired.
-        """
+        """Generate a QR code data model from the current QR string."""
         if not self._qr_string:
-            raise ValueError("No QR code available. Start connection first.")
-        if self._qr_expired:
-            raise ValueError("QR code has expired. Request a new one.")
-
+            raise ValueError("No QR code available. Start a new connection.")
+        if self._qr_expires and datetime.now(timezone.utc) > self._qr_expires:
+            raise ValueError("QR code expired. Request a new one.")
         return QRCodeData(
-            qr_code=self._generate_qr_base64(self._qr_string),
+            qr_code=self._generate_qr_image(),
             qr_string=self._qr_string,
-            expires_at=datetime.fromtimestamp(
-                self._qr_generated_at + self._qr_ttl, tz=timezone.utc
-            ),
-            session_id=self.session_id,
+            expires_at=self._qr_expires or datetime.now(timezone.utc) + timedelta(seconds=60),
         )
+
+    def add_state_listener(self, callback: Callable):
+        self._state_listeners.append(callback)
+
+    async def _set_state(self, new_state: ConnectionState, error_msg: Optional[str] = None):
+        old_state = self.state
+        self.state = new_state
+        self._error_message = error_msg
+        if new_state == ConnectionState.CONNECTED:
+            self._connected_at = datetime.now(timezone.utc)
+            self._last_seen = datetime.now(timezone.utc)
+        await self._log.add("state_change", f"{old_state} -> {new_state}")
+        # Notify listeners
+        for cb in self._state_listeners:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(old_state, new_state)
+                else:
+                    cb(old_state, new_state)
+            except Exception as e:
+                logger.error("State listener error: %s", e)
 
     # ── Connector Communication ─────────────────────────────────
 
@@ -406,7 +586,7 @@ class WhatsAppSessionConnection:
         """Get or create the HTTP client for connector communication."""
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(
-                base_url=self._connector_url or "http://127.0.0.1:3001",
+                base_url=self._connector_url,
                 timeout=httpx.Timeout(self.config.request_timeout),
                 headers={"Content-Type": "application/json"},
             )
@@ -428,12 +608,15 @@ class WhatsAppSessionConnection:
             return None
         except httpx.ConnectError:
             logger.error("Cannot connect to WhatsApp connector at %s", self._connector_url)
+            await self._log.add("error", f"Cannot reach connector at {self._connector_url}")
             return None
         except httpx.TimeoutException:
             logger.error("Timeout connecting to WhatsApp connector")
+            await self._log.add("error", "Connector timeout")
             return None
         except Exception as e:
             logger.error("Connector request error: %s", e)
+            await self._log.add("error", f"Connector error: {e}")
             return None
 
     # ── Connection Lifecycle ────────────────────────────────────
@@ -443,258 +626,233 @@ class WhatsAppSessionConnection:
         Start the WhatsApp connection flow.
 
         1. Check for existing session -> restore if available
-        2. Start the connector service
-        3. Request QR code
-        4. Return QR code data for scanning
-
-        Returns QRCodeData if QR is needed, None if already connected.
+        2. Start a new session -> get QR code
+        3. Begin polling for events
         """
-        self.state = ConnectionState.CONNECTING
+        await self._set_state(ConnectionState.CONNECTING)
+        await self._log.add("connect", "Starting connection...")
 
         # Try to restore existing session
         existing_auth = self._store.load_auth_state(self.session_id)
-        existing_meta = self._store.load_metadata(self.session_id)
-
-        if existing_meta:
-            self._phone_number = existing_meta.get("phone_number")
-            self._push_name = existing_meta.get("push_name")
-
-        # Start connector
-        connector_started = await self._start_connector(existing_auth)
-        if not connector_started:
-            self.state = ConnectionState.ERROR
-            raise ConnectionError("Failed to start WhatsApp connector service")
-
-        # Check if already authenticated
         if existing_auth:
+            logger.info("Found existing session for %s, attempting restore...", self.session_id)
             restored = await self._try_restore_session(existing_auth)
             if restored:
-                self.state = ConnectionState.CONNECTED
-                self._connected_at = datetime.now(timezone.utc)
-                self._reconnect_policy.reset()
-                self._running = True
-                self._poll_task = asyncio.create_task(self._poll_events())
-                logger.info("Session %s restored successfully", self.session_id)
+                await self._start_polling()
+                await self._start_health_check()
+                await self._log.add("connect", "Session restored from disk")
                 return None
 
-        # Generate new QR code
-        qr_data = await self._request_qr()
-        if qr_data:
-            self.state = ConnectionState.QR_WAITING
-            self._running = True
-            self._poll_task = asyncio.create_task(self._poll_events())
-            return qr_data
+            # Restore failed, start fresh
+            logger.info("Session restore failed for %s, starting fresh", self.session_id)
+            await self._log.add("connect", "Session restore failed, starting fresh")
 
-        self.state = ConnectionState.ERROR
-        raise ConnectionError("Failed to generate QR code")
+        # Start new session through connector
+        result = await self._connector_request(
+            "POST",
+            "/session/start",
+            json={
+                "sessionId": self.session_id,
+                "botId": self.bot_id,
+            },
+        )
+
+        if not result:
+            await self._set_state(ConnectionState.ERROR, "Failed to start session on connector")
+            raise ConnectionError("Could not start WhatsApp session on connector. Is the connector running?")
+
+        # The connector either returns a QR code or connects immediately
+        if result.get("qr"):
+            qr_string = result["qr"]
+            expires_in = result.get("expiresIn", 60)
+            self.update_qr(qr_string, expires_in)
+            await self._set_state(ConnectionState.QR_WAITING)
+            await self._log.add("qr", "QR code generated", {"expires_in": expires_in})
+
+            # Schedule QR expiry
+            if self._qr_expiry_task:
+                self._qr_expiry_task.cancel()
+            self._qr_expiry_task = asyncio.create_task(self._handle_qr_expiry(expires_in))
+
+            # Start polling for events (to catch when the QR is scanned)
+            await self._start_polling()
+            await self._start_health_check()
+
+            return QRCodeData(
+                qr_code=self._generate_qr_image(),
+                qr_string=qr_string,
+                expires_at=self._qr_expires,
+            )
+
+        if result.get("connected"):
+            await self._set_state(ConnectionState.CONNECTED)
+            self._phone_number = result.get("phoneNumber", "")
+            self._push_name = result.get("pushName", "")
+            await self._start_polling()
+            await self._start_health_check()
+            await self._log.add("connect", "Connected immediately (no QR needed)", {
+                "phone": self._phone_number,
+            })
+            return None
+
+        await self._set_state(ConnectionState.ERROR, "Unexpected connector response")
+        raise ConnectionError("Unexpected response from WhatsApp connector")
+
+    async def _try_restore_session(self, auth_state: dict) -> bool:
+        """Try to restore a session using saved auth state."""
+        result = await self._connector_request(
+            "POST",
+            "/session/restore",
+            json={
+                "sessionId": self.session_id,
+                "botId": self.bot_id,
+                "state": auth_state,
+            },
+        )
+
+        if result and result.get("connected"):
+            await self._set_state(ConnectionState.CONNECTED)
+            self._phone_number = result.get("phoneNumber", "")
+            self._push_name = result.get("pushName", "")
+            self._reconnect_policy.reset()
+            # Load metadata
+            meta = self._store.load_metadata(self.session_id) or {}
+            if not self._phone_number:
+                self._phone_number = meta.get("phone_number")
+            if not self._push_name:
+                self._push_name = meta.get("push_name")
+            return True
+
+        # If restore returns a QR instead
+        if result and result.get("qr"):
+            qr_string = result["qr"]
+            expires_in = result.get("expiresIn", 60)
+            self.update_qr(qr_string, expires_in)
+            await self._set_state(ConnectionState.QR_WAITING)
+            await self._log.add("qr", "New QR after restore attempt", {"expires_in": expires_in})
+            return False
+
+        return False
 
     async def disconnect(self) -> None:
-        """Disconnect the WhatsApp session and clean up resources."""
+        """Disconnect this session cleanly."""
         logger.info("Disconnecting session %s", self.session_id)
-        self._running = False
+        self._disconnect_event.set()
 
+        # Cancel background tasks
         if self._poll_task:
             self._poll_task.cancel()
             try:
                 await self._poll_task
             except asyncio.CancelledError:
-                pass
+            pass
             self._poll_task = None
 
-        # Notify connector to logout
-        await self._connector_request("POST", "/logout", json={"sessionId": self.session_id})
+        if self._health_task:
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except asyncio.CancelledError:
+            pass
+            self._health_task = None
 
+        if self._qr_expiry_task:
+            self._qr_expiry_task.cancel()
+            try:
+                await self._qr_expiry_task
+            except asyncio.CancelledError:
+            pass
+            self._qr_expiry_task = None
+
+        # Tell the connector to disconnect
+        await self._connector_request(
+            "POST",
+            "/session/disconnect",
+            json={"sessionId": self.session_id},
+        )
+
+        # Close the HTTP client
+        if self._http_client and not self._http_client.is_closed:
+            await self._http_client.aclose()
+
+        # Cancel any pending connects
+        await self._set_state(ConnectionState.DISCONNECTED)
+        await self._log.add("disconnect", "Session disconnected")
+
+    async def reconnect(self) -> Optional[QRCodeData]:
+        """
+        Attempt to reconnect with exponential backoff.
+        Returns a new QR code if reconnection requires re-authentication.
+        """
+        await self._set_state(ConnectionState.RECONNECTING)
+        await self._log.add("reconnect", f"Attempt {self._reconnect_policy.attempt + 1}")
+
+        # Close existing client (if any)
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
             self._http_client = None
 
-        await self._stop_connector()
-        self.state = ConnectionState.DISCONNECTED
-        logger.info("Session %s disconnected", self.session_id)
+        delay = self._reconnect_policy.next_delay()
+        logger.info("Reconnecting session %s in %.1fs (attempt %d)", self.session_id, delay, self._reconnect_policy.attempt)
+        await asyncio.sleep(delay)
 
-    async def refresh_qr(self) -> QRCodeData:
-        """Request a fresh QR code."""
-        if self._state not in (ConnectionState.QR_WAITING, ConnectionState.CONNECTING):
-            raise ValueError(f"Cannot refresh QR in state {self._state}")
+        # Check if we got disconnected during the wait
+        if self._disconnect_event.is_set():
+            return None
 
-        qr_data = await self._request_qr()
-        if qr_data is None:
-            raise ConnectionError("Failed to refresh QR code")
-        return qr_data
+        return await self.connect()
 
-    # ── Connector Management ────────────────────────────────────
+    # ── QR Code Expiry ──────────────────────────────────────────
 
-    async def _start_connector(self, existing_auth: Optional[dict]) -> bool:
-        """
-        Start the WhatsApp connector service.
-
-        If the connector is configured as a remote service, just verify it's reachable.
-        If running locally, spawn it as a subprocess.
-        """
-        connector_host = os.getenv("WHATSAPP_CONNECTOR_HOST", "127.0.0.1")
-        connector_port = os.getenv("WHATSAPP_CONNECTOR_PORT", "3001")
-        self._connector_url = f"http://{connector_host}:{connector_port}"
-
-        # Check if connector is already running
+    async def _handle_qr_expiry(self, expires_in: int):
+        """Handle QR code expiry."""
         try:
-            client = await self._get_client()
-            response = await client.get("/health")
-            if response.status_code == 200:
-                logger.info("WhatsApp connector is already running at %s", self._connector_url)
-                return True
-        except Exception:
+            await asyncio.sleep(expires_in)
+            if self.state == ConnectionState.QR_WAITING:
+                logger.info("QR code expired for session %s", self.session_id)
+                await self._log.add("qr_expired", "QR code expired")
+                self._qr_string = None
+                self._qr_expires = None
+                # Request a new QR from the connector
+                result = await self._connector_request(
+                    "POST",
+                    "/session/qr",
+                    json={"sessionId": self.session_id},
+                )
+                if result and result.get("qr"):
+                    qr_string = result["qr"]
+                    new_expires = result.get("expiresIn", 60)
+                    self.update_qr(qr_string, new_expires)
+                    await self._log.add("qr", "Auto-refreshed QR code", {"expires_in": new_expires})
+                    # Schedule next expiry
+                    self._qr_expiry_task = asyncio.create_task(
+                        self._handle_qr_expiry(new_expires)
+                    )
+                else:
+                    await self._log.add("error", "Could not refresh QR code")
+        except asyncio.CancelledError:
             pass
-
-        # Try to spawn local connector
-        spawn_local = os.getenv("WHATSAPP_CONNECTOR_SPAWN", "true").lower() == "true"
-        if not spawn_local:
-            logger.error("WhatsApp connector not reachable and auto-spawn disabled")
-            return False
-
-        return await self._spawn_connector_subprocess()
-
-    async def _spawn_connector_subprocess(self) -> bool:
-        """Spawn the Node.js WhatsApp connector as a subprocess."""
-        import subprocess
-        import sys
-
-        connector_dir = Path(__file__).resolve().parent.parent.parent / "whatsapp-connector"
-        entry_file = connector_dir / "src" / "index.js"
-
-        if not entry_file.exists():
-            # Try alternative entry points
-            for alt in ["server.js", "app.js", "index.ts"]:
-                candidate = connector_dir / "src" / alt
-                if candidate.exists():
-                    entry_file = candidate
-                    break
-            else:
-                # Try root level
-                for alt in ["index.js", "server.js", "app.js"]:
-                    candidate = connector_dir / alt
-                    if candidate.exists():
-                        entry_file = candidate
-                        break
-
-        if not entry_file.exists():
-            logger.warning(
-                "WhatsApp connector entry point not found at %s. "
-                "Running in standalone mode (no Node.js connector).",
-                connector_dir,
-            )
-            # In standalone mode, we simulate the connector
-            return await self._start_standalone_mode()
-
-        env = os.environ.copy()
-        env["PORT"] = os.getenv("WHATSAPP_CONNECTOR_PORT", "3001")
-        env["AUTH_DIR"] = self.config.auth_dir
-        env["SESSION_ID"] = self.session_id
-
-        try:
-            self._process = subprocess.Popen(
-                [sys.executable, "-c", f"print('Connector would start: {entry_file}')"]
-                if False  # Placeholder: replace with actual node spawn
-                else ["node", str(entry_file)],
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=str(connector_dir),
-            )
-            logger.info("Spawned connector process PID %d", self._process.pid)
-
-            # Wait for connector to be ready
-            for attempt in range(10):
-                await asyncio.sleep(1)
-                try:
-                    client = await self._get_client()
-                    response = await client.get("/health")
-                    if response.status_code == 200:
-                        logger.info("Connector is ready")
-                        return True
-                except Exception:
-                    pass
-
-            logger.error("Connector did not become ready in time")
-            return False
-
-        except FileNotFoundError:
-            logger.warning("Node.js not found. Running in standalone mode.")
-            return await self._start_standalone_mode()
-        except Exception as e:
-            logger.error("Failed to spawn connector: %s", e)
-            return await self._start_standalone_mode()
-
-    async def _start_standalone_mode(self) -> bool:
-        """
-        Start in standalone mode without a Node.js connector.
-        This uses aiohttp to create a minimal connector-compatible
-        endpoint that manages the WhatsApp Web connection directly.
-        """
-        logger.info("Starting WhatsApp standalone mode for session %s", self.session_id)
-        # In standalone mode, we mark the connector as "available"
-        # The actual connection logic is handled via the _request_qr and _poll_events methods
-        # which will use the wppconnect-python or similar library
-        return True
-
-    async def _stop_connector(self) -> None:
-        """Stop the connector subprocess if we spawned it."""
-        if self._process:
-            try:
-                self._process.terminate()
-                self._process.wait(timeout=5)
-            except Exception:
-                self._process.kill()
-            self._process = None
-            logger.info("Connector process stopped")
-
-    # ── Session Restore ──────────────────────────────────────────
-
-    async def _try_restore_session(self, auth_state: dict) -> bool:
-        """Try to restore a previous session using saved auth state."""
-        result = await self._connector_request(
-            "POST", "/restore", json={
-                "sessionId": self.session_id,
-                "authState": auth_state,
-            }
-        )
-        if result and result.get("success"):
-            self._phone_number = result.get("phoneNumber", self._phone_number)
-            self._push_name = result.get("pushName", self._push_name)
-            return True
-        return False
-
-    # ── QR Code Request ─────────────────────────────────────────
-
-    async def _request_qr(self) -> Optional[QRCodeData]:
-        """Request a new QR code from the connector."""
-        result = await self._connector_request(
-            "POST", "/qr", json={"sessionId": self.session_id}
-        )
-        if result and result.get("qr"):
-            self.update_qr(result["qr"])
-            return self.generate_qr()
-
-        # If connector doesn't support QR directly, generate a placeholder
-        # In production, this would use the actual WhatsApp Web protocol
-        logger.warning("Connector did not return QR, generating session QR")
-        session_qr = f"flora:{self.session_id}:{uuid.uuid4().hex[:16]}"
-        self.update_qr(session_qr)
-        return self.generate_qr()
 
     # ── Event Polling ───────────────────────────────────────────
 
-    async def _poll_events(self) -> None:
-        """
-        Poll the connector for events (messages, status updates, etc.).
-        Runs as a long-lived background task.
-        """
-        logger.info("Started event polling for session %s", self.session_id)
-        while self._running:
+    async def _start_polling(self):
+        """Start polling the connector for events."""
+        if self._poll_task and not self._poll_task.done():
+            return
+        self._poll_task = asyncio.create_task(self._poll_events())
+        logger.debug("Event polling started for session %s", self.session_id)
+
+    async def _poll_events(self):
+        """Poll the connector for new events."""
+        logger.info("Event poll loop started for session %s", self.session_id)
+
+        while not self._disconnect_event.is_set():
             try:
                 result = await self._connector_request(
-                    "GET", f"/events/{self.session_id}",
-                    params={"since": int(time.time()) - 60},
+                    "GET",
+                    f"/session/{self.session_id}/events",
                 )
+
                 if result:
                     events = result.get("events", [])
                     for event in events:
@@ -707,6 +865,7 @@ class WhatsAppSessionConnection:
                 break
             except Exception as e:
                 logger.error("Event polling error: %s", e)
+                await self._log.add("error", f"Poll error: {e}")
                 await self._handle_connection_error(e)
 
             await asyncio.sleep(2)  # Poll every 2 seconds
@@ -722,281 +881,635 @@ class WhatsAppSessionConnection:
         elif event_type == "qr":
             qr_string = event.get("qr", "")
             if qr_string:
-                self.update_qr(qr_string)
+                self.update_qr(qr_string, event.get("expiresIn", 60))
+                if self.state != ConnectionState.QR_WAITING:
+                    await self._set_state(ConnectionState.QR_WAITING)
         elif event_type == "connected":
-            self.state = ConnectionState.CONNECTED
-            self._connected_at = datetime.now(timezone.utc)
-            self._phone_number = event.get("phoneNumber")
-            self._push_name = event.get("pushName")
+            await self._set_state(ConnectionState.CONNECTED)
+            self._phone_number = event.get("phoneNumber", "")
+            self._push_name = event.get("pushName", "")
             self._reconnect_policy.reset()
             self._store.save_metadata(self.session_id, {
                 "phone_number": self._phone_number,
                 "push_name": self._push_name,
-                "connected_at": self._connected_at.isoformat(),
+                "connected_at": datetime.now(timezone.utc).isoformat(),
             })
+            # Clear QR data
+            self._qr_string = None
+            self._qr_expires = None
             logger.info(
                 "Session %s connected as %s (%s)",
                 self.session_id, self._phone_number, self._push_name,
             )
+            await self._log.add("connected", f"Connected as {self._push_name} ({self._phone_number})")
         elif event_type == "disconnected":
             reason = event.get("reason", "unknown")
             logger.warning("Session %s disconnected: %s", self.session_id, reason)
+            await self._log.add("disconnected", f"Disconnected: {reason}", {"reason": reason})
             if reason == "loggedOut":
-                self.state = ConnectionState.LOGGED_OUT
+                await self._set_state(ConnectionState.LOGGED_OUT)
                 self._store.delete_session(self.session_id)
             else:
-                await self._handle_connection_error(Exception(f"Disconnected: {reason}"))
-        elif event_type == "auth_state":
+                await self._set_state(ConnectionState.DISCONNECTED)
+                # Auto-reconnect for non-logout disconnections
+                asyncio.create_task(self._handle_auto_reconnect())
+        elif event_type == "connection.update":
+            status = event.get("status", "")
+            if status == "open":
+                await self._set_state(ConnectionState.CONNECTED)
+            elif status == "close":
+                reason = event.get("reason", "")
+                if reason == "loggedOut":
+                    await self._set_state(ConnectionState.LOGGED_OUT)
+                else:
+                    await self._set_state(ConnectionState.DISCONNECTED)
+                    asyncio.create_task(self._handle_auto_reconnect())
+        elif event_type == "creds.update":
             # Save updated auth state
-            auth_state = event.get("state", {})
-            if auth_state:
-                self._store.save_auth_state(self.session_id, auth_state)
-        elif event_type == "battery":
-            self._battery_level = event.get("level")
-            self._plugged_in = event.get("plugged")
-        elif event_type == "presence":
+            state = event.get("state")
+            if state:
+                self._store.save_auth_state(self.session_id, state)
+                await self._log.add("auth", "Auth state updated")
+            return
+        else:
+            logger.debug("Unhandled event type: %s", event_type)
+            return
+
+        # Update last_seen
+        self._last_seen = datetime.now(timezone.utc)
+
+    async def _handle_auto_reconnect(self):
+        """Handle automatic reconnection after unexpected disconnection."""
+        if self._disconnect_event.is_set():
+            return
+        if self._reconnect_policy.attempt >= self.config.max_retries:
+            logger.error(
+                "Max retries (%d) exceeded for session %s. Giving up.",
+                self.config.max_retries, self.session_id,
+            )
+            await self._set_state(ConnectionState.ERROR, "Max reconnection attempts exceeded")
+            await self._log.add("error", "Max reconnection attempts exceeded")
+            return
+
+        try:
+            qr_data = await self.reconnect()
+            # If reconnect returned a QR, the service can broadcast it
+            if qr_data and hasattr(self, '_notifier') and self._notifier:
+                await self._notifier.broadcast_qr(
+                    self.bot_id, qr_data.qr_code, qr_data.qr_string, qr_data.expires_at
+                )
+        except Exception as e:
+            logger.error("Auto-reconnect failed: %s", e)
+            await self._set_state(ConnectionState.ERROR, f"Reconnect failed: {e}")
+
+    async def _handle_connection_error(self, error: Exception):
+        """Handle a connection error."""
+        await self._set_state(ConnectionState.ERROR, str(error))
+        logger.error("Connection error for session %s: %s", self.session_id, error)
+
+    # ── Health Monitoring ───────────────────────────────────────
+
+    async def _start_health_check(self):
+        """Start periodic health checks."""
+        if self._health_task and not self._health_task.done():
+            return
+        self._health_task = asyncio.create_task(self._health_check_loop())
+        logger.debug("Health check started for session %s", self.session_id)
+
+    async def _health_check_loop(self):
+        """Periodically check the session health."""
+        while not self._disconnect_event.is_set():
+            try:
+                await asyncio.sleep(self._health_check_interval)
+                if self._disconnect_event.is_set():
+                    break
+                await self._check_health()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Health check error: %s", e)
+
+    async def _check_health(self):
+        """Check the health of the connection."""
+        if self.state not in (ConnectionState.CONNECTED, ConnectionState.QR_WAITING, ConnectionState.CONNECTING):
+            return
+
+        result = await self._connector_request("GET", f"/session/{self.session_id}/health")
+        if result is None:
+            # Connector unreachable
+            await self._log.add("health", "Connector unreachable")
+            return
+
+        status = result.get("status", "")
+        if status == "healthy":
+            if self.state != ConnectionState.CONNECTED:
+                await self._set_state(ConnectionState.CONNECTED)
             self._last_seen = datetime.now(timezone.utc)
+        elif status == "unhealthy":
+            await self._log.add("health", f"Unhealthy: {result.get('reason', 'unknown')}")
+            await self._handle_connection_error(Exception(f"Health check failed: {result.get('reason')}"))
+
+    # ── Message Handling ────────────────────────────────────────
 
     async def _handle_incoming_message(self, event: dict) -> None:
-        """Process an incoming message event."""
+        """
+        Handle an incoming message event.
+
+        1. Parse the message
+        2. Store in database
+        3. Store in conversation
+        4. Dispatch to Flora engine for AI response
+        5. Broadcast via WebSocket
+        """
+        self._messages_received += 1
+        message_id = event.get("id", str(uuid.uuid4()))
+        from_number = event.get("from", "")
+        is_group = event.get("isGroup", False)
+
+        # Ignore own messages
+        if event.get("fromMe", False):
+            logger.debug("Ignoring own message %s", message_id)
+            return
+
+        # Ignore status/notification messages
+        msg_type = event.get("messageType", "")
+        if msg_type in ("protocolMessage", "senderKeyDistributionMessage", "messageContextInfo"):
+            logger.debug("Ignoring system message type: %s", msg_type)
+            return
+
+        logger.info(
+            "Incoming message [%s] from %s (group=%s, type=%s)",
+            message_id, from_number, is_group, msg_type,
+        )
+        await self._log.add("message_in", f"From {from_number}", {
+            "message_id": message_id,
+            "is_group": is_group,
+            "text_preview": (event.get("text", "") or "")[:50],
+        })
+
         try:
-            msg = IncomingMessage(
-                id=event.get("id", str(uuid.uuid4())),
-                from_number=event.get("from", ""),
-                to_number=event.get("to", self._phone_number or ""),
-                text=event.get("text"),
+            text = event.get("text") or event.get("caption") or ""
+            # Store message in database
+            db_message_id = await self._store_message_in_db(event, text)
+
+            # Store in conversation
+            conversation_id = await self._store_in_conversation(event, text)
+
+            # Build incoming message model
+            incoming = IncomingMessage(
+                id=message_id,
+                from_number=from_number,
+                to_number=event.get("to", ""),
+                text=text if text else None,
                 media_url=event.get("mediaUrl"),
                 media_type=event.get("mediaType"),
                 media_caption=event.get("mediaCaption"),
                 timestamp=datetime.fromtimestamp(
                     event.get("timestamp", time.time()), tz=timezone.utc
                 ),
-                is_group=event.get("isGroup", False),
+                is_group=is_group,
                 group_id=event.get("groupId"),
-                push_name=event.get("pushName"),
+                push_name=event.get("pushName", ""),
                 session_id=self.session_id,
                 bot_id=self.bot_id,
                 raw=event,
             )
-            logger.info(
-                "Incoming message from %s in session %s",
-                msg.from_number, self.session_id,
-            )
-            self._notify_message(msg)
+
+            # Dispatch to Flora engine for processing
+            try:
+                response_text = await self._dispatch_to_flora(incoming)
+                if response_text:
+                    send_result = await self.send_text(
+                        to=from_number,
+                        text=response_text,
+                        reply_to=message_id if not is_group else None,
+                    )
+                    if send_result.success:
+                        logger.info(
+                            "AI response sent to %s (message_id: %s)",
+                            from_number, send_result.message_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Failed to send AI response to %s: %s",
+                            from_number, send_result.error,
+                        )
+            except Exception as e:
+                logger.exception("Error in Flora dispatch for message %s: %s", message_id, e)
+
         except Exception as e:
-            logger.error("Error processing incoming message: %s", e)
+            logger.exception("Error handling incoming message: %s", e)
+            await self._log.add("error", f"Message handling error: {e}")
 
-    async def _check_health(self) -> None:
-        """Check the connection health and update status."""
-        result = await self._connector_request(
-            "GET", f"/status/{self.session_id}"
-        )
-        if result:
-            self._last_seen = datetime.now(timezone.utc)
-            self._battery_level = result.get("battery", self._battery_level)
-            self._plugged_in = result.get("plugged", self._plugged_in)
-
-    async def _handle_connection_error(self, error: Exception) -> None:
-        """Handle a connection error with reconnection logic."""
-        if not self._running:
-            return
-
-        self.state = ConnectionState.RECONNECTING
-        delay = self._reconnect_policy.increment()
-        logger.warning(
-            "Connection error for session %s (retry %d/%d): %s. "
-            "Reconnecting in %.1fs",
-            self.session_id,
-            self._reconnect_policy.retry_count,
-            self._reconnect_policy.max_retries,
-            error,
-            delay,
-        )
-
-        if self._reconnect_policy.exhausted:
-            logger.error(
-                "Max retries exhausted for session %s. Giving up.", self.session_id
-            )
-            self.state = ConnectionState.ERROR
-            self._running = False
-            return
-
-        await asyncio.sleep(delay)
-
-        # Try to reconnect
+    async def _store_message_in_db(self, event: dict, text: str) -> Optional[str]:
+        """Store the incoming message in the database."""
         try:
-            existing_auth = self._store.load_auth_state(self.session_id)
-            if existing_auth:
-                restored = await self._try_restore_session(existing_auth)
-                if restored:
-                    self.state = ConnectionState.CONNECTED
-                    self._reconnect_policy.reset()
-                    logger.info("Session %s reconnected successfully", self.session_id)
-                    return
+            from backend.database import AsyncSessionLocal
+            from backend.models.message import Message
+            from sqlalchemy import insert
 
-            # If restore failed, try full reconnect
-            await self.connect()
+            message_db_id = str(uuid.uuid4())
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    insert(Message).values(
+                        id=message_db_id,
+                        bot_id=self.bot_id,
+                        whatsapp_message_id=event.get("id", ""),
+                        direction="in",
+                        sender_phone=event.get("from", ""),
+                        sender_name=event.get("pushName", ""),
+                        message_type=self._map_message_type(event),
+                        content=text,
+                        media_url=event.get("mediaUrl"),
+                        media_type=event.get("mediaType"),
+                        media_caption=event.get("mediaCaption"),
+                        is_read=False,
+                        is_delivered=True,
+                        whatsapp_status="received",
+                        conversation_id=event.get("conversationId", ""),
+                        raw_data=event,
+                    )
+                )
+                await db.commit()
+                logger.debug("Message stored in DB: %s", message_db_id)
+                return message_db_id
         except Exception as e:
-            logger.error("Reconnection attempt failed: %s", e)
+            logger.error("Failed to store message in DB: %s", e)
+            return None
+
+    async def _store_in_conversation(self, event: dict, text: str) -> Optional[str]:
+        """Store/update the conversation thread."""
+        try:
+            from backend.database import AsyncSessionLocal
+            from backend.models.conversation import Conversation
+            from sqlalchemy import select, update
+
+            sender = event.get("from", "")
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(Conversation).where(
+                        Conversation.bot_id == self.bot_id,
+                        Conversation.contact_phone == sender,
+                    )
+                )
+                conversation = result.scalar_one_or_none()
+
+                if conversation:
+                    await db.execute(
+                        update(Conversation)
+                        .where(Conversation.id == conversation.id)
+                        .values(
+                            last_message=text[:200] if text else "",
+                            last_message_at=datetime.now(timezone.utc),
+                            unread_count=Conversation.unread_count + 1,
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                    )
+                else:
+                    db.add(Conversation(
+                        id=str(uuid.uuid4()),
+                        bot_id=self.bot_id,
+                        contact_phone=sender,
+                        contact_name=event.get("pushName", ""),
+                        last_message=text[:200] if text else "",
+                        last_message_at=datetime.now(timezone.utc),
+                        unread_count=1,
+                    ))
+                await db.commit()
+                return conversation.id if conversation else None
+        except Exception as e:
+            logger.error("Failed to update conversation: %s", e)
+            return None
+
+    def _map_message_type(self, event: dict) -> str:
+        """Map connector message types to internal types."""
+        msg_type = event.get("messageType", "")
+        type_map = {
+            "text": "text",
+            "conversation": "text",
+            "extendedTextMessage": "text",
+            "imageMessage": "image",
+            "videoMessage": "video",
+            "audioMessage": "audio",
+            "documentMessage": "document",
+            "documentWithCaptionMessage": "document",
+            "stickerMessage": "sticker",
+            "locationMessage": "location",
+            "contactMessage": "contact",
+            "contactsArrayMessage": "contact",
+            "buttonsMessage": "buttons",
+            "listMessage": "list",
+            "templateMessage": "template",
+            "reactionMessage": "reaction",
+            "pollCreationMessage": "poll",
+            "pollUpdateMessage": "poll",
+        }
+        return type_map.get(msg_type, "text")
+
+    async def _dispatch_to_flora(self, message: IncomingMessage) -> Optional[str]:
+        """
+        Dispatch an incoming message to the Flora AI engine.
+        Returns the response text, or None if no response.
+        """
+        if not message.bot_id:
+            logger.warning("No bot_id on message, cannot dispatch")
+            return None
+
+        try:
+            from backend.database import AsyncSessionLocal
+            from backend.models.bot import Bot
+            from sqlalchemy import select
+
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(Bot).where(Bot.id == message.bot_id)
+                )
+                bot = result.scalar_one_or_none()
+
+                if not bot:
+                    logger.warning("Bot %s not found", message.bot_id)
+                    return None
+
+                if not bot.is_active:
+                    logger.debug("Bot %s inactive, skipping", message.bot_id)
+                    return None
+
+                # Check for opted-out users
+                if self._is_opted_out(message.from_number):
+                    logger.debug("User %s opted out, skipping", message.from_number)
+                    return None
+
+                # Process through the chat engine
+                from backend.core.chat_engine import ChatEngine
+                engine = ChatEngine(db, bot)
+                msg_text = message.text or message.media_caption or ""
+
+                response = await engine.process_message(
+                    message=msg_text,
+                    session_id=message.from_number,
+                )
+
+                if response and response.get("content"):
+                    return response["content"]
+                return None
+
+        except Exception as e:
+            logger.exception("Flora dispatch error: %s", e)
+            return None
+
+    def _is_opted_out(self, phone: str) -> bool:
+        """Check if a user has opted out of bot messages."""
+        # Simple file-based opt-out; could be DB in production
+        opt_out_file = Path(self.config.auth_dir) / "opt_outs.txt"
+        if opt_out_file.exists():
+            opts = opt_out_file.read_text().splitlines()
+            return phone in opts
+        return False
 
     # ── Message Sending ─────────────────────────────────────────
 
-    async def send_text(self, to: str, text: str, reply_to: Optional[str] = None) -> SendResult:
+    async def send_text(
+        self,
+        to: str,
+        text: str,
+        reply_to: Optional[str] = None,
+    ) -> SendResult:
         """Send a text message."""
-        return await self.send_message(OutgoingMessage(to=to, text=text, reply_to=reply_to))
-
-    async def send_image(
-        self, to: str, media_url: str, caption: Optional[str] = None
-    ) -> SendResult:
-        """Send an image message."""
-        return await self.send_message(OutgoingMessage(
-            to=to, media_url=media_url, media_type="image", media_caption=caption,
-        ))
-
-    async def send_video(
-        self, to: str, media_url: str, caption: Optional[str] = None
-    ) -> SendResult:
-        """Send a video message."""
-        return await self.send_message(OutgoingMessage(
-            to=to, media_url=media_url, media_type="video", media_caption=caption,
-        ))
-
-    async def send_audio(self, to: str, media_url: str) -> SendResult:
-        """Send an audio message."""
-        return await self.send_message(OutgoingMessage(
-            to=to, media_url=media_url, media_type="audio",
-        ))
-
-    async def send_document(
-        self, to: str, media_url: str, filename: Optional[str] = None
-    ) -> SendResult:
-        """Send a document message."""
-        return await self.send_message(OutgoingMessage(
-            to=to, media_url=media_url, media_type="document", media_filename=filename,
-        ))
-
-    async def send_buttons(
-        self, to: str, text: str, buttons: list[dict]
-    ) -> SendResult:
-        """Send a message with interactive buttons."""
-        return await self.send_message(OutgoingMessage(
-            to=to, text=text, buttons=buttons,
-        ))
-
-    async def send_message(self, message: OutgoingMessage) -> SendResult:
-        """
-        Send a message through the WhatsApp connector.
-
-        Supports text, media (image/video/audio/document), and button messages.
-        """
-        if self._state != ConnectionState.CONNECTED:
+        if self.state != ConnectionState.CONNECTED:
             return SendResult(
                 success=False,
-                error=f"Cannot send message: session is {self._state}",
+                error=f"Session is {self.state.value}, not connected",
             )
+
+        # Check rate limit
+        if not await self._rate_limiter.acquire(to):
+            wait = self._rate_limiter.get_wait_time(to)
+            return SendResult(
+                success=False,
+                error=f"Rate limited. Try again in {wait:.0f}s",
+            )
+
+        msg = OutgoingMessage(
+            to=to, text=text, reply_to=reply_to
+        )
+        return await self._send(msg)
+
+    async def send_media(
+        self,
+        to: str,
+        media_url: str,
+        media_type: str = "image",
+        caption: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> SendResult:
+        """Send a media message (image, video, audio, document)."""
+        if self.state != ConnectionState.CONNECTED:
+            return SendResult(
+                success=False,
+                error=f"Session is {self.state.value}, not connected",
+            )
+
+        if not await self._rate_limiter.acquire(to):
+            wait = self._rate_limiter.get_wait_time(to)
+            return SendResult(
+                success=False,
+                error=f"Rate limited. Try again in {wait:.0f}s",
+            )
+
+        msg = OutgoingMessage(
+            to=to,
+            media_url=media_url,
+            media_type=media_type,
+            media_caption=caption,
+            media_filename=filename,
+        )
+        return await self._send(msg)
+
+    async def send_buttons(
+        self,
+        to: str,
+        text: str,
+        buttons: list[dict],
+    ) -> SendResult:
+        """Send a message with interactive buttons."""
+        if self.state != ConnectionState.CONNECTED:
+            return SendResult(
+                success=False,
+                error=f"Session is {self.state.value}, not connected",
+            )
+
+        if not await self._rate_limiter.acquire(to):
+            return SendResult(
+                success=False,
+                error="Rate limited",
+            )
+
+        msg = OutgoingMessage(
+            to=to, text=text, buttons=buttons
+        )
+        return await self._send(msg)
+
+    async def _send(self, msg: OutgoingMessage) -> SendResult:
+        """Send a message through the connector."""
+        await self._log.add("message_out", f"To {msg.to}", {
+            "type": msg.media_type or "text",
+            "text_preview": (msg.text or "")[:50],
+        })
 
         payload = {
             "sessionId": self.session_id,
-            "to": message.to,
-            "text": message.text,
-            "mediaUrl": message.media_url,
-            "mediaType": message.media_type,
-            "mediaCaption": message.media_caption,
-            "mediaFilename": message.media_filename,
-            "buttons": message.buttons,
-            "replyTo": message.reply_to,
+            "to": self._format_phone(msg.to),
+            "text": msg.text,
+            "mediaUrl": msg.media_url,
+            "mediaType": msg.media_type,
+            "caption": msg.media_caption,
+            "filename": msg.media_filename,
+            "buttons": msg.buttons,
+            "replyTo": msg.reply_to,
         }
         # Remove None values
         payload = {k: v for k, v in payload.items() if v is not None}
 
-        result = await self._connector_request("POST", "/send", json=payload)
+        result = await self._connector_request(
+            "POST", "/message/send", json=payload
+        )
 
         if result and result.get("messageId"):
+            self._messages_sent += 1
+            message_id = result["messageId"]
+            logger.info("Message sent: %s -> %s (id: %s)", self.session_id, msg.to, message_id)
+
+            # Store outgoing message in DB
+            try:
+                await self._store_outgoing_in_db(msg, message_id)
+            except Exception as e:
+                logger.warning("Failed to store outgoing message: %s", e)
+
             return SendResult(
                 success=True,
-                message_id=result["messageId"],
+                message_id=message_id,
             )
 
-        error = result.get("error", "Unknown error") if result else "No response from connector"
-        logger.error("Failed to send message: %s", error)
-        return SendResult(success=False, error=error)
+        error_msg = result.get("error", "Unknown error") if result else "No response from connector"
+        logger.warning("Failed to send message to %s: %s", msg.to, error_msg)
+        return SendResult(
+            success=False,
+            error=error_msg,
+        )
+
+    async def _store_outgoing_in_db(self, msg: OutgoingMessage, whatsapp_id: str):
+        """Store outgoing message in the database."""
+        try:
+            from backend.database import AsyncSessionLocal
+            from backend.models.message import Message
+            from sqlalchemy import insert
+
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    insert(Message).values(
+                        id=str(uuid.uuid4()),
+                        bot_id=self.bot_id,
+                        whatsapp_message_id=whatsapp_id,
+                        direction="out",
+                        sender_phone=self._phone_number or "",
+                        message_type=msg.media_type or "text",
+                        content=msg.text or "",
+                        media_url=msg.media_url,
+                        media_type=msg.media_type,
+                        media_caption=msg.media_caption,
+                        media_filename=msg.media_filename,
+                        is_read=True,
+                        is_delivered=False,
+                        whatsapp_status="sent",
+                        raw_data=msg.model_dump(),
+                    )
+                )
+                await db.commit()
+        except Exception as e:
+            logger.error("Failed to store outgoing message: %s", e)
+
+    def _format_phone(self, phone: str) -> str:
+        """Format a phone number for WhatsApp (digits only, no +)."""
+        return phone.replace("+", "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+
+    # ── Logging ─────────────────────────────────────────────────
+
+    async def get_logs(self, limit: int = 100, event_type: Optional[str] = None) -> list[dict]:
+        """Get connection logs for debugging."""
+        return await self._log.get_entries(limit=limit, event_type=event_type)
+
+    async def clear_logs(self):
+        """Clear connection logs."""
+        await self._log.clear()
 
 
-# ─── WhatsApp Service (Singleton Registry) ──────────────────────────
+# ─── WhatsApp Service (Singleton Manager) ──────────────────────────
 
 class WhatsAppService:
     """
-    Top-level service that manages all WhatsApp session connections.
-
-    This is the main entry point for the API layer. It maintains a registry
-    of active connections and provides methods to create, find, and destroy
-    sessions.
-
-    Usage:
-        service = WhatsAppService()
-        qr = await service.connect(bot_id="...", session_id="...")
-        await service.send_text(session_id="...", to="5511999999999", text="Hello")
-        await service.disconnect(session_id="...")
+    Manages all WhatsApp session connections.
+    Singleton pattern ensures only one service instance across the app.
     """
 
-    _instance: Optional[WhatsAppService] = None
-    _lock = asyncio.Lock()
+    _instance: Optional["WhatsAppService"] = None
+    _instance_lock = asyncio.Lock()
+
+    @classmethod
+    async def get_instance(cls) -> "WhatsAppService":
+        if cls._instance is None:
+            async with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+                    # Initialize notifier
+                    cls._instance._notifier = WebSocketNotifier()
+                    logger.info("WhatsAppService singleton created")
+        return cls._instance
+
+    @classmethod
+    async def reset_instance(cls):
+        """Reset the instance (useful for testing)."""
+        if cls._instance:
+            for conn in list(cls._instance._sessions.values()):
+                await conn.disconnect()
+            cls._instance = None
 
     def __init__(self):
         self._sessions: dict[str, WhatsAppSessionConnection] = {}
         self._bot_session_map: dict[str, str] = {}  # bot_id -> session_id
         self._store = SessionStore(".wa_sessions")
+        self._notifier: Optional[WebSocketNotifier] = None
+        self._started_at = datetime.now(timezone.utc)
+        self._total_messages_sent = 0
+        self._total_messages_received = 0
+        self._log = ConnectionLog()
+        logger.info("WhatsAppService initialized")
 
-    @classmethod
-    async def get_instance(cls) -> WhatsAppService:
-        """Get or create the singleton service instance."""
-        if cls._instance is None:
-            async with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls()
-        return cls._instance
-
-    @classmethod
-    def reset_instance(cls) -> None:
-        """Reset the singleton (for testing)."""
-        cls._instance = None
-
-    # ── Session Management ──────────────────────────────────────
-
-    async def connect(
+    async def create_session(
         self,
         bot_id: str,
         session_id: Optional[str] = None,
         phone_number: Optional[str] = None,
         webhook_url: Optional[str] = None,
-    ) -> Optional[QRCodeData]:
+    ) -> QRCodeData:
         """
-        Create a new WhatsApp connection for a bot.
+        Create and connect a new WhatsApp session for a bot.
 
-        If a session already exists for this bot, returns its current status
-        instead of creating a new one.
-
-        Returns QRCodeData if a new QR code was generated, or None if
-        the session was already connected/restored.
+        Returns QRCodeData if a QR code is needed, None if connected immediately.
         """
-        # Check if bot already has an active session
-        if bot_id in self._bot_session_map:
-            existing_sid = self._bot_session_map[bot_id]
-            if existing_sid in self._sessions:
-                conn = self._sessions[existing_sid]
-                if conn.state == ConnectionState.CONNECTED:
-                    logger.info("Bot %s already has active session %s", bot_id, existing_sid)
-                    return None
-                elif conn.state == ConnectionState.QR_WAITING:
-                    # Return existing QR if still valid
-                    try:
-                        return conn.generate_qr()
-                    except ValueError:
-                        # QR expired, refresh
-                        return await conn.refresh_qr()
+        sid = session_id or f"bot_{bot_id}"
 
-        # Create new session
-        sid = session_id or f"wa_{bot_id}_{uuid.uuid4().hex[:8]}"
+        # Check if already connected
+        existing = self._sessions.get(sid)
+        if existing and existing.state == ConnectionState.CONNECTED:
+            logger.info("Session %s already connected", sid)
+            return None
+
+        # Clean up old session if exists but disconnected
+        if existing:
+            await existing.disconnect()
+            self._sessions.pop(sid, None)
+            self._bot_session_map.pop(bot_id, None)
+
         config = WhatsAppConfig(
             session_id=sid,
             bot_id=bot_id,
@@ -1004,6 +1517,9 @@ class WhatsAppService:
             webhook_url=webhook_url,
         )
         conn = WhatsAppSessionConnection(config)
+        # Attach the notifier
+        if self._notifier:
+            conn._notifier = self._notifier
         self._sessions[sid] = conn
         self._bot_session_map[bot_id] = sid
 
@@ -1054,107 +1570,87 @@ class WhatsAppService:
             return conn.status
         return None
 
-    async def refresh_qr(self, session_id: str) -> QRCodeData:
-        """Refresh the QR code for a session."""
+    def list_sessions(self) -> list[ConnectionStatus]:
+        """List all active sessions."""
+        return [conn.status for conn in self._sessions.values()]
+
+    def list_stored_sessions(self) -> list[str]:
+        """List all stored session IDs (including disconnected)."""
+        return self._store.list_sessions()
+
+    async def send_message(self, session_id: str, message: OutgoingMessage) -> SendResult:
+        """Send a message through a specific session."""
         conn = self._sessions.get(session_id)
         if not conn:
-            raise ValueError(f"Session not found: {session_id}")
-        return await conn.refresh_qr()
-
-    # ── Message Sending ─────────────────────────────────────────
+            return SendResult(
+                success=False,
+                error="Session not found",
+            )
+        result = await conn._send(message)
+        if result.success:
+            self._total_messages_sent += 1
+        return result
 
     async def send_text(
         self, session_id: str, to: str, text: str, reply_to: Optional[str] = None
     ) -> SendResult:
-        """Send a text message."""
+        """Send a text message through a specific session."""
         conn = self._sessions.get(session_id)
         if not conn:
-            return SendResult(success=False, error=f"Session not found: {session_id}")
-        return await conn.send_text(to, text, reply_to)
+            return SendResult(
+                success=False,
+                error="Session not found",
+            )
+        return await conn.send_text(to, text, reply_to=reply_to)
 
-    async def send_message(self, session_id: str, message: OutgoingMessage) -> SendResult:
-        """Send any type of message."""
+    async def refresh_qr(self, session_id: str) -> QRCodeData:
+        """Request a fresh QR code for a session."""
         conn = self._sessions.get(session_id)
         if not conn:
-            return SendResult(success=False, error=f"Session not found: {session_id}")
-        return await conn.send_message(message)
+            raise ValueError("Session not found")
+        if conn.state == ConnectionState.CONNECTED:
+            raise ValueError("Session is already connected")
 
-    async def send_image(
-        self, session_id: str, to: str, media_url: str, caption: Optional[str] = None
-    ) -> SendResult:
-        """Send an image."""
+        # Request new QR from connector
+        result = await conn._connector_request(
+            "POST", "/session/qr", json={"sessionId": session_id}
+        )
+        if not result or not result.get("qr"):
+            raise ConnectionError("Connector could not generate a QR code")
+
+        qr_string = result["qr"]
+        expires_in = result.get("expiresIn", 60)
+        conn.update_qr(qr_string, expires_in)
+
+        # Reschedule expiry
+        if conn._qr_expiry_task:
+            conn._qr_expiry_task.cancel()
+        conn._qr_expiry_task = asyncio.create_task(
+            conn._handle_qr_expiry(expires_in)
+        )
+
+        return conn.generate_qr()
+
+    async def get_session_logs(
+        self, session_id: str, limit: int = 100, event_type: Optional[str] = None
+    ) -> list[dict]:
+        """Get logs for a specific session."""
         conn = self._sessions.get(session_id)
         if not conn:
-            return SendResult(success=False, error=f"Session not found: {session_id}")
-        return await conn.send_image(to, media_url, caption)
+            return []
+        return await conn.get_logs(limit=limit, event_type=event_type)
 
-    async def send_video(
-        self, session_id: str, to: str, media_url: str, caption: Optional[str] = None
-    ) -> SendResult:
-        """Send a video."""
-        conn = self._sessions.get(session_id)
-        if not conn:
-            return SendResult(success=False, error=f"Session not found: {session_id}")
-        return await conn.send_video(to, media_url, caption)
-
-    async def send_audio(self, session_id: str, to: str, media_url: str) -> SendResult:
-        """Send audio."""
-        conn = self._sessions.get(session_id)
-        if not conn:
-            return SendResult(success=False, error=f"Session not found: {session_id}")
-        return await conn.send_audio(to, media_url)
-
-    async def send_document(
-        self, session_id: str, to: str, media_url: str, filename: Optional[str] = None
-    ) -> SendResult:
-        """Send a document."""
-        conn = self._sessions.get(session_id)
-        if not conn:
-            return SendResult(success=False, error=f"Session not found: {session_id}")
-        return await conn.send_document(to, media_url, filename)
-
-    async def send_buttons(
-        self, session_id: str, to: str, text: str, buttons: list[dict]
-    ) -> SendResult:
-        """Send a message with buttons."""
-        conn = self._sessions.get(session_id)
-        if not conn:
-            return SendResult(success=False, error=f"Session not found: {session_id}")
-        return await conn.send_buttons(to, text, buttons)
-
-    # ── Callback Registration ──────────────────────────────────
-
-    def on_message(self, session_id: str, callback: Callable) -> None:
-        """Register a message callback for a session."""
-        conn = self._sessions.get(session_id)
-        if conn:
-            conn.on_message(callback)
-
-    def on_status_change(self, session_id: str, callback: Callable) -> None:
-        """Register a status change callback for a session."""
-        conn = self._sessions.get(session_id)
-        if conn:
-            conn.on_status_change(callback)
-
-    # ── Listing ─────────────────────────────────────────────────
-
-    def list_sessions(self) -> list[ConnectionStatus]:
-        """List all active sessions and their statuses."""
-        return [conn.status for conn in self._sessions.values()]
-
-    def list_stored_sessions(self) -> list[str]:
-        """List all session IDs with stored auth state on disk."""
-        return self._store.list_sessions()
-
-    # ── Cleanup ─────────────────────────────────────────────────
-
-    async def shutdown(self) -> None:
-        """Disconnect all sessions and clean up."""
-        logger.info("Shutting down WhatsApp service, disconnecting %d sessions", len(self._sessions))
-        for sid, conn in list(self._sessions.items()):
-            try:
-                await conn.disconnect()
-            except Exception as e:
-                logger.error("Error disconnecting session %s: %s", sid, e)
-        self._sessions.clear()
-        self._bot_session_map.clear()
+    async def get_service_stats(self) -> dict:
+        """Get overall service statistics."""
+        active = sum(
+            1 for c in self._sessions.values()
+            if c.state == ConnectionState.CONNECTED
+        )
+        return {
+            "total_sessions": len(self._sessions),
+            "active_sessions": active,
+            "total_messages_sent": self._total_messages_sent,
+            "total_messages_received": self._total_messages_received,
+            "uptime_seconds": (datetime.now(timezone.utc) - self._started_at).total_seconds(),
+            "stored_sessions": len(self._store.list_sessions()),
+        }

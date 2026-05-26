@@ -9,11 +9,12 @@ Session-scoped endpoints check that the user owns the bot.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Optional
 from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import get_current_user, get_db, require_role
@@ -21,6 +22,7 @@ from backend.services.whatsapp_service import (
     WhatsAppService,
     ConnectionState,
     OutgoingMessage,
+    WebSocketNotifier,
 )
 from backend.schemas.whatsapp import (
     ConnectRequest,
@@ -47,6 +49,205 @@ async def _get_whatsapp_service() -> WhatsAppService:
     return await WhatsAppService.get_instance()
 
 
+# ─── WebSocket for Real-Time Updates ────────────────────────────────
+
+@router.websocket("/ws/{bot_id}")
+async def whatsapp_websocket(
+    websocket: WebSocket,
+    bot_id: str,
+):
+    """
+    WebSocket endpoint for real-time WhatsApp updates for a specific bot.
+
+    Events pushed to connected clients:
+    - connection_status: Connection state changes (connecting, connected, disconnected, error)
+    - qr_code: New QR code generated (with base64 image and expiry)
+    - message: Incoming and outgoing messages
+
+    Authentication: The client sends a JWT token as a query parameter:
+    ws://host/api/v1/whatsapp/ws/{bot_id}?token=JWT_TOKEN
+    """
+    wa_service = await WhatsAppService.get_instance()
+    notifier = wa_service._notifier
+
+    if not notifier:
+        await websocket.close(code=4001, reason="WebSocket notifier not initialized")
+        return
+
+    # Authenticate via query parameter token
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing authentication token")
+        return
+
+    # Validate the token
+    try:
+        from jose import jwt, JWTError
+        from backend.config import settings
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        user_id = payload.get("sub")
+        if not user_id:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+
+        # Check that the user owns the bot or is admin
+        from sqlalchemy import select
+        from backend.models import Bot
+        from backend.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Bot).where(Bot.id == bot_id))
+            bot = result.scalar_one_or_none()
+
+        if not bot:
+            await websocket.close(code=4004, reason="Bot not found")
+            return
+
+        # Role check: admin can connect to any bot
+        user_role = payload.get("role", "user")
+        if str(bot.owner_id) != str(user_id) and user_role != "admin":
+            await websocket.close(code=4003, reason="Not authorized for this bot")
+            return
+
+    except Exception as e:
+        logger.warning("WebSocket auth failed: %s", e)
+        await websocket.close(code=4001, reason="Authentication failed")
+        return
+
+    await websocket.accept()
+    await notifier.register(websocket, bot_id)
+
+    # Send initial status
+    conn = wa_service.get_connection_by_bot(bot_id)
+    if conn:
+        await notifier.broadcast_status(bot_id, conn.status)
+
+    try:
+        # Keep the connection alive and handle client messages
+        # Client can send "ping" to keep alive, or "refresh_status"
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=60.0,
+                )
+                msg_type = data.get("type", "")
+
+                if msg_type == "ping":
+                    await websocket.send_json({"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()})
+
+                elif msg_type == "refresh_status":
+                    if conn:
+                        await notifier.broadcast_status(bot_id, conn.status)
+
+                elif msg_type == "get_qr":
+                    if conn and conn.state == ConnectionState.QR_WAITING:
+                        try:
+                            qr = conn.generate_qr()
+                            await notifier.broadcast_qr(bot_id, qr.qr_code, qr.qr_string, qr.expires_at)
+                        except ValueError as e:
+                            await websocket.send_json({"type": "error", "message": str(e)})
+
+                elif msg_type == "send_message":
+                    # Send a message via WebSocket
+                    if not conn or conn.state != ConnectionState.CONNECTED:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Session not connected",
+                        })
+                        continue
+                    to = data.get("to", "")
+                    text = data.get("text", "")
+                    if not to or not text:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Missing 'to' or 'text'",
+                        })
+                        continue
+                    result = await conn.send_text(to, text)
+                    await websocket.send_json({
+                        "type": "send_result",
+                        "data": {
+                            "success": result.success,
+                            "message_id": result.message_id,
+                            "error": result.error,
+                        },
+                    })
+
+            except asyncio.TimeoutError:
+                # Send a ping to keep the connection alive
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected for bot %s", bot_id)
+    except Exception as e:
+        logger.error("WebSocket error for bot %s: %s", bot_id, e)
+    finally:
+        await notifier.unregister(websocket, bot_id)
+
+
+# Global WebSocket endpoint (admin dashboard)
+@router.websocket("/ws")
+async def whatsapp_global_websocket(
+    websocket: WebSocket,
+):
+    """
+    Global WebSocket endpoint for the admin dashboard.
+    Broadcasts all WhatsApp events (all bots).
+
+    ws://host/api/v1/whatsapp/ws?token=ADMIN_JWT_TOKEN
+    """
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+
+    try:
+        from jose import jwt, JWTError
+        from backend.config import settings
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        if payload.get("role") != "admin":
+            await websocket.close(code=4003, reason="Admin access required")
+            return
+    except Exception:
+        await websocket.close(code=4001, reason="Authentication failed")
+        return
+
+    wa_service = await WhatsAppService.get_instance()
+    notifier = wa_service._notifier
+    if not notifier:
+        await websocket.close(code=4001, reason="Notifier not initialized")
+        return
+
+    await websocket.accept()
+    await notifier.register(websocket)  # No bot_id = global listener
+
+    # Send initial full status
+    for session_status in wa_service.list_sessions():
+        await notifier.broadcast_status(session_status.bot_id, session_status)
+
+    try:
+        while True:
+            try:
+                data = await asyncio.wait_for(websocket.receive_json(), timeout=60.0)
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                elif data.get("type") == "get_stats":
+                    stats = await wa_service.get_service_stats()
+                    await websocket.send_json({"type": "service_stats", "data": stats})
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
+    except WebSocketDisconnect:
+        logger.info("Global WebSocket disconnected")
+    except Exception as e:
+        logger.error("Global WebSocket error: %s", e)
+    finally:
+        await notifier.unregister(websocket)
+
+
 # ─── Connect ────────────────────────────────────────────────────────
 
 @router.post(
@@ -70,7 +271,6 @@ async def connect_whatsapp(
     2. Creates or restores a WhatsApp session
     3. Returns QR code for scanning, or status if already connected
     """
-    # Verify bot ownership
     from sqlalchemy import select
     from backend.models import Bot
 
@@ -81,7 +281,6 @@ async def connect_whatsapp(
         raise HTTPException(status_code=404, detail="Bot not found")
 
     if str(bot.owner_id) != str(current_user.id):
-        # Allow admins to connect any bot
         await require_role("admin")(current_user)
 
     # Check rate limit: max 3 active sessions per user
@@ -96,7 +295,7 @@ async def connect_whatsapp(
         )
 
     try:
-        qr_data = await wa_service.connect(
+        qr_data = await wa_service.create_session(
             bot_id=request.bot_id,
             session_id=request.session_id,
             phone_number=request.phone_number,
@@ -302,7 +501,6 @@ async def get_bot_status(
     if not conn:
         # Check stored sessions
         stored = wa_service.list_stored_sessions()
-        # Check if any stored session belongs to this bot
         for sid in stored:
             meta = wa_service._store.load_metadata(sid)
             if meta and meta.get("bot_id") == bot_id:
@@ -608,3 +806,51 @@ async def whatsapp_health(
         total_sessions=len(sessions),
         timestamp=datetime.now(timezone.utc),
     )
+
+
+# ─── Connection Logs ────────────────────────────────────────────────
+
+@router.get(
+    "/logs/{session_id}",
+    summary="Get connection logs",
+)
+async def get_connection_logs(
+    session_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    event_type: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """Get connection event logs for debugging."""
+    conn = wa_service.get_connection(session_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership
+    if conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
+
+    logs = await wa_service.get_session_logs(session_id, limit=limit, event_type=event_type)
+    return {"session_id": session_id, "logs": logs, "total": len(logs)}
+
+
+# ─── Service Stats ──────────────────────────────────────────────────
+
+@router.get(
+    "/stats",
+    summary="Get WhatsApp service statistics",
+)
+async def get_service_stats(
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """Get overall WhatsApp service statistics (admin only)."""
+    await require_role("admin")(current_user)
+    stats = await wa_service.get_service_stats()
+    return stats

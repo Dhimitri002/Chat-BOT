@@ -270,7 +270,7 @@ class AnalyticsService:
         success_count = (await db.execute(
             select(func.count(LLMUsage.id))
             .where(LLMUsage.created_at >= since)
-            .where(LLMUsage.success == "True")
+            .where(LLMUsage.success == True)
         )).scalar() or 0
 
         # Average latency

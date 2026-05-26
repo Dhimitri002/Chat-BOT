@@ -21,6 +21,7 @@ from backend.models.webhook import Webhook
 from backend.models.notification import Notification
 from backend.models.flora_session import FloraSession
 from backend.models.payment import Payment, PaymentStatus
+from backend.models.conversation import Conversation
 
 __all__ = [
     "Base",
@@ -37,4 +38,5 @@ __all__ = [
     "Webhook", "Notification",
     "FloraSession",
     "Payment", "PaymentStatus",
+    "Conversation",
 ]

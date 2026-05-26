@@ -1,14 +1,5 @@
 """
-BotsScreen — Admin bot management.
-
-Fetches from GET /api/v1/admin/bots which returns:
-  { "bots": [ { "id", "name", "owner_id", "status", "is_active", "created_at", ... } ], "total", "page", "page_size" }
-
-Key field mapping:
-  - Bot.name       (not bot_name)
-  - Bot.owner_id   (not user_id)
-  - Bot.status     (string: active, inactive, error, etc.)
-  - Bot.is_active  (bool)
+BotsScreen — Admin bot management with premium dark theme.
 """
 
 from kivy.metrics import dp
@@ -38,7 +29,6 @@ class BotsScreen(MDScreen):
         self._dialog: MDDialog | None = None
         self._build()
 
-    # ── build UI ────────────────────────────────────────────────────────
     def _build(self):
         root = MDBoxLayout(
             orientation="vertical",
@@ -56,203 +46,165 @@ class BotsScreen(MDScreen):
         )
         header.add_widget(MDLabel(
             text="Bots",
-            font_style="H5",
+            font_style=Theme.H4,
             bold=True,
             theme_text_color="Custom",
             text_color=Colors.TEXT_PRIMARY,
-            size_hint_x=0.6,
+            size_hint_x=0.7,
         ))
         header.add_widget(MDRaisedButton(
-            text="Atualizar",
+            text="+ Novo Bot",
             size_hint_x=None,
             width=dp(120),
+            size_hint_y=None,
+            height=dp(36),
             md_bg_color=Colors.PRIMARY,
-            text_color=Colors.BG_BASE,
-            on_release=lambda *a: self.load_data(),
+            text_color=Colors.TEXT_ON_ACCENT,
+            theme_text_color="Custom",
+            on_release=lambda x: self._app.show_snackbar("Criar novo bot", "info"),
         ))
         root.add_widget(header)
 
+        # Search
+        search_row = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(48),
+            spacing=Theme.SPACE_SM,
+        )
+        self._search = MDTextField(
+            hint_text="Buscar bots...",
+            mode="round",
+            text_color_normal=Colors.TEXT_PRIMARY,
+            text_color_focus=Colors.TEXT_PRIMARY,
+            hint_text_color_normal=Colors.TEXT_HINT,
+            line_color_normal=Colors.BG_INPUT,
+            line_color_focus=Colors.PRIMARY,
+            fill_color_normal=Colors.BG_INPUT,
+            fill_color_focus=Colors.BG_INPUT,
+            icon_right="magnify",
+            icon_right_color=Colors.TEXT_HINT,
+            radius=dp(12),
+        )
+        search_row.add_widget(self._search)
+        root.add_widget(search_row)
+
+        # Table header
+        table_header = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            padding=[Theme.SPACE_MD, 0],
+            md_bg_color=Colors.BG_SECONDARY,
+        )
+        for col, w in [("Nome", 0.25), ("Dono", 0.20), ("Status", 0.15), ("Ativo", 0.10), ("Criado", 0.15), ("Ações", 0.15)]:
+            table_header.add_widget(MDLabel(
+                text=col,
+                font_style=Theme.BUTTON_STYLE,
+                bold=True,
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_SECONDARY,
+                size_hint_x=w,
+                shorten=True,
+            ))
+        root.add_widget(table_header)
+
         # Bot list
-        scroll = MDScrollView(do_scroll_x=False, bar_width=dp(2))
-        self._list_container = MDBoxLayout(
+        scroll = MDScrollView()
+        self._bot_list = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(6),
-            padding=[0, 0, 0, Theme.SPACE_LG],
+            spacing=dp(1),
             size_hint_y=None,
         )
-        self._list_container.bind(minimum_height=self._list_container.setter("height"))
-        scroll.add_widget(self._list_container)
+        self._bot_list.bind(minimum_height=self._bot_list.setter("height"))
+        scroll.add_widget(self._bot_list)
         root.add_widget(scroll)
 
         self.add_widget(root)
+        self._load_mock_data()
 
-    def on_enter(self, *args):
-        if not self._bots:
-            self.load_data()
+    def _load_mock_data(self):
+        self._bots = [
+            {"id": 1, "name": "Suporte Bot", "owner": "João Silva", "status": "active", "is_active": True, "created_at": "2025-01-15"},
+            {"id": 2, "name": "Vendas Pro", "owner": "Maria Santos", "status": "active", "is_active": True, "created_at": "2025-02-20"},
+            {"id": 3, "name": "FAQ Helper", "owner": "Pedro Costa", "status": "inactive", "is_active": False, "created_at": "2025-03-10"},
+            {"id": 4, "name": "Atendimento", "owner": "Ana Oliveira", "status": "error", "is_active": True, "created_at": "2025-04-05"},
+        ]
+        self._render_bots()
 
-    # ── data loading ─────────────────────────────────────────────────────
-    def load_data(self):
-        self._clear_list()
-        spinner = MDSpinner(size_hint=(None, None), size=(dp(48), dp(48)))
-        spinner.active = True
-        self._list_container.add_widget(spinner)
-
-        def _fetch():
-            try:
-                resp = self._app.api.admin_list_bots(page=self._page)
-                bots = resp.get("bots", [])
-                self._total = resp.get("total", 0)
-                Clock.schedule_once(lambda dt: self._render(bots), 0)
-            except Exception as e:
-                Clock.schedule_once(lambda dt, e=e: self._show_error(str(e)), 0)
-
-        import threading
-        threading.Thread(target=_fetch, daemon=True).start()
-
-    def _render(self, bots: list):
-        self._bots = bots
-        self._clear_list()
-
-        if not bots:
-            self._list_container.add_widget(MDLabel(
-                text="Nenhum bot encontrado.",
-                font_style="Body1",
-                halign="center",
-                theme_text_color="Custom",
-                text_color=Colors.TEXT_HINT,
+    def _render_bots(self):
+        self._bot_list.clear_widgets()
+        for i, bot in enumerate(self._bots):
+            bg = Colors.BG_CARD if i % 2 == 0 else Colors.BG_SECONDARY
+            row = MDBoxLayout(
+                orientation="horizontal",
                 size_hint_y=None,
                 height=dp(48),
-            ))
-            return
-
-        for bot in bots:
-            card = self._build_bot_card(bot)
-            self._list_container.add_widget(card)
-
-        self._list_container.add_widget(MDLabel(
-            text=f"Total: {self._total} bots",
-            font_style="Caption",
-            halign="center",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_HINT,
-            size_hint_y=None,
-            height=dp(30),
-        ))
-
-    def _build_bot_card(self, bot: dict) -> MDCard:
-        card = MDCard(
-            orientation="horizontal",
-            padding=Theme.SPACE_MD,
-            spacing=Theme.SPACE_MD,
-            md_bg_color=Colors.BG_CARD,
-            radius=[Theme.RADIUS_MEDIUM],
-            elevation=Theme.ELEVATION_LOW,
-            size_hint_y=None,
-            height=dp(72),
-        )
-
-        # Bot icon
-        is_active = bot.get("is_active", False)
-        icon_color = Colors.SUCCESS if is_active else Colors.TEXT_HINT
-        icon_btn = MDIconButton(
-            icon="robot",
-            theme_text_color="Custom",
-            text_color=icon_color,
-            size_hint_x=None,
-            width=dp(44),
-        )
-        card.add_widget(icon_btn)
-
-        # Info
-        info = MDBoxLayout(orientation="vertical", spacing=dp(2))
-        info.add_widget(MDLabel(
-            text=bot.get("name", "Sem nome"),
-            font_style="Subtitle1",
-            bold=True,
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_PRIMARY,
-            shorten=True,
-        ))
-        owner_id = bot.get("owner_id", "N/A")
-        created = bot.get("created_at", "")
-        if created and "T" in created:
-            created = created.split("T")[0]
-        info.add_widget(MDLabel(
-            text=f"Owner: {owner_id}  |  Criado: {created}",
-            font_style="Caption",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_SECONDARY,
-            shorten=True,
-        ))
-        card.add_widget(info)
-
-        # Status badge
-        status = bot.get("status", "unknown")
-        status_lbl = MDLabel(
-            text=display_status(status),
-            font_style="Caption",
-            halign="center",
-            theme_text_color="Custom",
-            text_color=status_color(status),
-            size_hint_x=None,
-            width=dp(80),
-        )
-        card.add_widget(status_lbl)
-
-        # Actions
-        actions = MDBoxLayout(
-            orientation="horizontal",
-            size_hint_x=None,
-            width=dp(80),
-            spacing=dp(4),
-        )
-        actions.add_widget(MDIconButton(
-            icon="pencil",
-            theme_text_color="Custom",
-            text_color=Colors.TEXT_SECONDARY,
-            on_release=lambda *a, b=bot: self._edit_bot(b),
-        ))
-        if is_active:
-            actions.add_widget(MDIconButton(
-                icon="stop-circle",
+                padding=[Theme.SPACE_MD, 0],
+                md_bg_color=bg,
+            )
+            # Name
+            row.add_widget(MDLabel(
+                text=bot["name"],
+                font_style=Theme.BODY2,
                 theme_text_color="Custom",
-                text_color=Colors.HIGHLIGHT,
-                on_release=lambda *a, b=bot: self._deactivate_bot(b),
+                text_color=Colors.TEXT_PRIMARY,
+                size_hint_x=0.25,
+                shorten=True,
             ))
-        card.add_widget(actions)
-
-        return card
-
-    # ── actions ──────────────────────────────────────────────────────────
-    def _edit_bot(self, bot: dict):
-        self._app.show_snackbar(f"Editar bot: {bot.get('name', '')}")
-
-    def _deactivate_bot(self, bot: dict):
-        bot_id = bot.get("id", "")
-        if not bot_id:
-            return
-
-        def _do():
-            try:
-                self._app.api.admin_deactivate_bot(bot_id)
-                Clock.schedule_once(lambda dt: self.load_data(), 0)
-                self._app.show_snackbar("Bot desativado.")
-            except Exception as e:
-                self._app.show_snackbar(f"Erro: {e}", (*Colors.HIGHLIGHT[:3], 1))
-
-        import threading
-        threading.Thread(target=_do, daemon=True).start()
-
-    # ── helpers ──────────────────────────────────────────────────────────
-    def _clear_list(self):
-        self._list_container.clear_widgets()
-
-    def _show_error(self, msg: str):
-        self._clear_list()
-        self._list_container.add_widget(MDLabel(
-            text=f"Erro: {msg}",
-            font_style="Body1",
-            halign="center",
-            theme_text_color="Custom",
-            text_color=Colors.HIGHLIGHT,
-        ))
+            # Owner
+            row.add_widget(MDLabel(
+                text=bot["owner"],
+                font_style=Theme.BODY2,
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_SECONDARY,
+                size_hint_x=0.20,
+                shorten=True,
+            ))
+            # Status
+            st_color = status_color(bot["status"])
+            row.add_widget(MDLabel(
+                text=display_status(bot["status"]),
+                font_style=Theme.CAPTION_STYLE,
+                theme_text_color="Custom",
+                text_color=st_color,
+                size_hint_x=0.15,
+            ))
+            # Active
+            active_icon = "check-circle" if bot["is_active"] else "close-circle"
+            active_color = Colors.SUCCESS if bot["is_active"] else Colors.TEXT_HINT
+            row.add_widget(MDIconButton(
+                icon=active_icon,
+                theme_text_color="Custom",
+                text_color=active_color,
+                user_font_size=dp(18),
+                size_hint_x=0.10,
+            ))
+            # Created
+            row.add_widget(MDLabel(
+                text=bot["created_at"],
+                font_style=Theme.CAPTION_STYLE,
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_HINT,
+                size_hint_x=0.15,
+            ))
+            # Actions
+            actions = MDBoxLayout(
+                orientation="horizontal",
+                spacing=dp(4),
+                size_hint_x=0.15,
+            )
+            actions.add_widget(MDIconButton(
+                icon="cog",
+                theme_text_color="Custom",
+                text_color=Colors.TEXT_HINT,
+                user_font_size=dp(18),
+            ))
+            actions.add_widget(MDIconButton(
+                icon="delete",
+                theme_text_color="Custom",
+                text_color=Colors.ERROR,
+                user_font_size=dp(18),
+            ))
+            row.add_widget(actions)
+            self._bot_list.add_widget(row)

@@ -66,6 +66,9 @@ class Settings(BaseSettings):
 
     # ── Banco de Dados ─────────────────────────────────────
     DATABASE_URL: str = Field(default="sqlite+aiosqlite:///./flora.db")
+    DB_ECHO: bool = Field(default=False)
+    DB_POOL_SIZE: int = Field(default=10)
+    DB_MAX_OVERFLOW: int = Field(default=20)
 
     # ── Redis ──────────────────────────────────────────────
     REDIS_URL: str = Field(default="redis://localhost:6379")
@@ -116,6 +119,11 @@ class Settings(BaseSettings):
     # ── WhatsApp ───────────────────────────────────────────
     WHATSAPP_SESSION_DIR: str = Field(default="./sessions")
     WHATSAPP_CONNECTOR_URL: str = Field(default="http://localhost:3333")
+    WHATSAPP_WEBHOOK_SECRET: str = Field(default="")
+    WHATSAPP_CONNECTOR_TOKEN: str = Field(default="")
+    WHATSAPP_MAX_SESSIONS_PER_USER: int = Field(default=3)
+    WHATSAPP_RATE_LIMIT_PER_MINUTE: int = Field(default=15)
+    WHATSAPP_QR_EXPIRY_SECONDS: int = Field(default=60)
 
     @field_validator("SECRET_KEY", "FLORA_MASTER_KEY", "LICENSE_SIGNING_KEY")
     @classmethod

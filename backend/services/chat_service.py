@@ -265,7 +265,7 @@ class ChatService:
                 select(func.count(Message.id))
                 .where(Message.bot_id == bot_id)
                 .where(Message.user_phone == row.user_phone)
-                .where(Message.is_read == "False")
+                .where(Message.is_read == False)
             )
             unread_count = unread_result.scalar() or 0
 
@@ -289,7 +289,7 @@ class ChatService:
         query = (
             select(func.count(Message.id))
             .where(Message.bot_id == bot_id)
-            .where(Message.is_read == "False")
+            .where(Message.is_read == False)
         )
 
         if user_phone:
@@ -306,13 +306,13 @@ class ChatService:
             select(Message)
             .where(Message.bot_id == bot_id)
             .where(Message.user_phone == user_phone)
-            .where(Message.is_read == "False")
+            .where(Message.is_read == False)
         )
         unread_messages = result.scalars().all()
 
         count = 0
         for msg in unread_messages:
-            msg.is_read = "True"
+            msg.is_read = True
             count += 1
 
         await db.commit()
