@@ -110,7 +110,13 @@ class Settings(BaseSettings):
     # ── Rate Limiting ──────────────────────────────────────
     RATE_LIMIT_REQUESTS: int = Field(default=100)
     RATE_LIMIT_WINDOW: int = Field(default=60)
+    RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60)
+    """Window in seconds for the rate limiting middleware."""
     RATE_LIMIT_PER_MINUTE: int = Field(default=60)
+
+    # ── License Checksum Secret ─────────────────────────────
+    LICENSE_SECRET: str = Field(default="license-checksum-secret")
+    """Secret used for license key checksum HMAC validation."""
 
     # ── Login ──────────────────────────────────────────────
     LOGIN_MAX_ATTEMPTS: int = Field(default=5)

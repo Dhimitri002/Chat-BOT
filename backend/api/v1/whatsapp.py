@@ -37,6 +37,12 @@ from backend.schemas.whatsapp import (
     SessionsResponse,
     SessionInfo,
     HealthCheckResponse,
+    WebhookIncomingPayload,
+    WebhookResponse,
+    ChatHistoryResponse,
+    ChatMessage,
+    EventLogResponse,
+    EventLogEntry,
 )
 
 logger = logging.getLogger(__name__)
@@ -854,3 +860,187 @@ async def get_service_stats(
     await require_role("admin")(current_user)
     stats = await wa_service.get_service_stats()
     return stats
+
+
+# ─── Webhook Endpoint (for external connectors) ─────────────────────
+
+@router.post(
+    "/webhook",
+    response_model=WebhookResponse,
+    summary="Receive webhook from external WhatsApp connector",
+    description=(
+        "Receives webhook events from an external WhatsApp connector or bridge service. "
+        "Supports events: message, qr, connected, disconnected, state_change."
+    ),
+)
+async def receive_webhook(
+    payload: WebhookIncomingPayload,
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """
+    Process incoming webhook from an external WhatsApp connector/bridge.
+
+    This endpoint is called by external services (Baileys bridge, wppconnect-server,
+    etc.) to deliver WhatsApp events to the Flora Platform.
+
+    Supported event types:
+    - `message` / `messages.upsert`: Incoming WhatsApp message
+    - `qr`: New QR code generated
+    - `connected` / `connection.open`: Session connected
+    - `disconnected` / `connection.close`: Session disconnected
+    - `state_change`: Connection state changed
+    """
+    try:
+        result = await wa_service.process_incoming_webhook(payload.model_dump())
+        if result.get("success"):
+            return WebhookResponse(success=True, message=result.get("message", "ok"))
+        return WebhookResponse(success=False, message=result.get("message", "error"))
+    except Exception as e:
+        logger.error("Webhook processing error: %s", e, exc_info=True)
+        return WebhookResponse(success=False, message=f"Error: {str(e)}")
+
+
+@router.post(
+    "/webhook/{session_id}",
+    response_model=WebhookResponse,
+    summary="Receive webhook for a specific session",
+)
+async def receive_session_webhook(
+    session_id: str,
+    payload: WebhookIncomingPayload,
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """Webhook endpoint scoped to a specific session ID."""
+    # Ensure the session_id from the path is used
+    data = payload.model_dump()
+    data["session_id"] = session_id
+    try:
+        result = await wa_service.process_incoming_webhook(data)
+        if result.get("success"):
+            return WebhookResponse(success=True, message=result.get("message", "ok"))
+        return WebhookResponse(success=False, message=result.get("message", "error"))
+    except Exception as e:
+        logger.error("Webhook processing error for session %s: %s", session_id, e, exc_info=True)
+        return WebhookResponse(success=False, message=f"Error: {str(e)}")
+
+
+# ─── Chat History ───────────────────────────────────────────────────
+
+@router.get(
+    "/chat/{session_id}",
+    response_model=ChatHistoryResponse,
+    summary="Get chat history for a session",
+)
+async def get_chat_history(
+    session_id: str,
+    contact_phone: str = Query(default="", description="Filter by contact phone number"),
+    limit: int = Query(default=50, ge=1, le=200),
+    before_id: str = Query(default="", description="Get messages before this message ID"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """
+    Get the chat history for a WhatsApp session.
+
+    Optionally filter by contact phone number to get the conversation
+    with a specific contact.
+    """
+    conn = wa_service.get_connection(session_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Verify ownership
+    if conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
+
+    messages = await wa_service.get_chat_history(
+        session_id,
+        contact_phone=contact_phone,
+        limit=limit,
+        before_id=before_id,
+    )
+
+    return ChatHistoryResponse(
+        session_id=session_id,
+        bot_id=conn.bot_id or "",
+        contact_phone=contact_phone,
+        messages=[
+            ChatMessage(
+                message_id=m.message_id,
+                direction=m.direction,
+                sender_phone=m.sender_phone,
+                recipient_phone=m.recipient_phone,
+                message_type=m.message_type,
+                content=m.content,
+                media_url=m.media_url,
+                media_caption=m.media_caption,
+                is_read=m.is_read,
+                is_delivered=m.is_delivered,
+                whatsapp_status=m.whatsapp_status,
+                timestamp=m.timestamp,
+                reply_to=m.reply_to,
+            )
+            for m in messages
+        ],
+        total=len(messages),
+        has_more=len(messages) >= limit,
+    )
+
+
+# ─── Event Log (from database) ──────────────────────────────────────
+
+@router.get(
+    "/events/{session_id}",
+    response_model=EventLogResponse,
+    summary="Get WhatsApp events from database",
+)
+async def get_event_log(
+    session_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    event_type: str = Query(default="", description="Filter by event type"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    wa_service: WhatsAppService = Depends(_get_whatsapp_service),
+):
+    """
+    Get WhatsApp events from the database for a session.
+
+    This provides persistent event history including connection attempts,
+    QR scans, messages sent/received, and errors.
+    """
+    conn = wa_service.get_connection(session_id)
+
+    # Verify ownership if connection exists
+    if conn and conn.bot_id:
+        from sqlalchemy import select
+        from backend.models import Bot
+        result = await db.execute(select(Bot).where(Bot.id == conn.bot_id))
+        bot = result.scalar_one_or_none()
+        if bot and str(bot.owner_id) != str(current_user.id):
+            await require_role("admin")(current_user)
+
+    events = await wa_service.get_events_from_db(
+        session_id, limit=limit, event_type=event_type
+    )
+
+    return EventLogResponse(
+        session_id=session_id,
+        events=[
+            EventLogEntry(
+                id=e["id"],
+                event_type=e["event_type"],
+                message=e["message"],
+                details=e["details"],
+                phone_number=e["phone_number"],
+                created_at=datetime.fromisoformat(e["created_at"]),
+            )
+            for e in events
+        ],
+        total=len(events),
+    )

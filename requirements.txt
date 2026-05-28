@@ -1,60 +1,287 @@
-# ═══════════════════════════════════════════════════════════════
-# Flora Platform — Python Dependencies
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════════
+# Flora Platform — Dependencies (Python 3.13.13)
+# Mais de 120 bibliotecas com suporte a LLMs, APIs, Backend, Frontend e Utilities
+# ═══════════════════════════════════════════════════════════════════════════════════
 
-# ── Backend ────────────────────────────────────────────────────
-fastapi==0.115.0
-uvicorn[standard]==0.30.0
-python-multipart==0.0.9
-
-# ── Database ──────────────────────────────────────────────────
-sqlalchemy==2.0.35
+# ─── Backend Core ──────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.34.0
+sqlalchemy[asyncio]==2.0.35
 aiosqlite==0.20.0
-asyncpg==0.29.0
-alembic==1.13.0
+pydantic==2.10.0
+pydantic-settings==2.7.1
+alembic==1.14.0
+starlette==0.41.3
+python-multipart==0.0.7
 
-# ── Auth & Security ───────────────────────────────────────────
+# ─── Authentication & Security ─────────────────────────────────────────────────
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-bcrypt==4.2.0
-cryptography==43.0.0
-pyotp==2.9.0
+bcrypt==4.2.2
+cryptography==44.0.0
+pyjwt==2.10.1
+pytz==2025.1
+python-slugify==8.0.4
 
-# ── HTTP & API ────────────────────────────────────────────────
-httpx==0.27.0
-aiohttp==3.10.0
-requests==2.32.0
+# ─── Database & ORM ────────────────────────────────────────────────────────────
+psycopg2-binary==2.9.13
+psycopg==3.2.3
+pymongo==4.10.1
+redis==5.2.1
+motor==3.6.0
+sqlmodel==0.0.22
+tortoise-orm==0.21.6
+beanie==1.28.0
+async-sqlalchemy==0.1.1
 
-# ── LLM / AI ──────────────────────────────────────────────────
-openai==1.40.0
-anthropic==0.34.0
-google-generative-ai==0.8.0
+# ─── HTTP & API ────────────────────────────────────────────────────────────────
+httpx==0.28.1
+aiohttp==3.11.11
+requests==2.32.3
+urllib3==2.3.0
+websockets==14.1
+python-socketio==5.12.0
+python-engineio==4.12.0
+aiofiles==24.1.0
 
-# ── WhatsApp ──────────────────────────────────────────────────
-qrcode[pil]==7.4.2
-Pillow==10.4.0
+# ─── LLMs: OpenAI ──────────────────────────────────────────────────────────────
+openai==1.59.5
+openai-whisper==20231214
+tiktoken==0.7.0
 
-# ── Kivy / KivyMD (Client & Admin Apps) ───────────────────────
-kivy==2.3.0
+# ─── LLMs: Anthropic Claude ────────────────────────────────────────────────────
+anthropic==0.42.0
+
+# ─── LLMs: Google Gemini ───────────────────────────────────────────────────────
+google-generativeai==0.8.3
+google-cloud-aiplatform==1.79.0
+google-cloud-vertexai==1.79.0
+google-auth==2.37.0
+google-api-python-client==1.36.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+
+# ─── LLMs: Groq ────────────────────────────────────────────────────────────────
+groq==0.15.0
+
+# ─── LLMs: Cohere ──────────────────────────────────────────────────────────────
+cohere==5.15.0
+
+# ─── LLMs: HuggingFace Transformers ────────────────────────────────────────────
+transformers==4.46.2
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+datasets==3.2.0
+tokenizers==0.20.3
+huggingface-hub==0.24.6
+accelerate==1.3.0
+optimum==1.24.1
+
+# ─── LLMs: LLaMA & Open Source Models ──────────────────────────────────────────
+llama-cpp-python==0.3.3
+ollama==0.3.3
+ctransformers==0.2.27
+gpt4all==3.1.0
+sentence-transformers==3.2.1
+chromadb==0.5.23
+
+# ─── LLMs: LangChain & RAG ────────────────────────────────────────────────────────
+langchain==0.3.7
+langchain-core==0.3.19
+langchain-openai==0.2.11
+langchain-anthropic==0.1.25
+langchain-google-genai==0.0.14
+langchain-community==0.0.39
+langgraph==0.2.29
+langchain-text-splitters==0.2.2
+langsmith==0.2.12
+
+# ─── LLMs: LiteLLM (Multi-Provider) ────────────────────────────────────────────
+litellm==1.54.0
+
+# ─── LLMs: Embeddings & Vectors ────────────────────────────────────────────────
+faiss-cpu==1.10.0
+pinecone-client==5.1.0
+weaviate-client==4.1.1
+qdrant-client==2.12.0
+milvus==2.4.0
+
+# ─── NLP & Text Processing ────────────────────────────────────────────────────
+nltk==3.9.1
+spacy==3.8.2
+textblob==0.17.1
+gensim==4.3.3
+scikit-learn==1.6.1
+matplotlib==3.9.3
+pandas==2.2.3
+numpy==2.2.0
+scipy==1.14.1
+
+# ─── LLMs: Ollama & Local Models ──────────────────────────────────────────────
+oobabooga==0.1.0
+
+# ─── Speech & Audio ────────────────────────────────────────────────────────────
+pydub==0.25.1
+librosa==0.10.2
+soundfile==0.12.1
+pyaudio==0.2.14
+pyttsx3==2.90
+google-cloud-speech==2.32.1
+azure-cognitiveservices-speech==1.43.0
+
+# ─── Vision & Image Processing ────────────────────────────────────────────────
+pillow==11.1.0
+opencv-python==4.11.0
+opencv-contrib-python==4.11.0
+scikit-image==0.24.0
+image-processing==1.1.12
+pytesseract==0.3.13
+easyocr==1.7.2
+
+# ─── WhatsApp & Messaging ──────────────────────────────────────────────────────
+twilio==10.3.0
+selenium==4.28.1
+pyselenium==3.14.1
+pytelegrambotapi==4.28.0
+python-telegram-bot==21.8
+
+# ─── UI/UX (KivyMD + Kivy) ────────────────────────────────────────────────────
+kivy==2.3.1
 kivymd==1.2.0
-pillow==10.4.0
+pygments==2.18.0
+pillow-simd==11.1.0.dev3
+pygame==2.6.1; sys_platform == "win32"
+pywin32==308; sys_platform == "win32"
+cython==3.0.11
+plyer==2.1.0
+buildozer==1.5.0
 
-# ── Utils ─────────────────────────────────────────────────────
-pydantic==2.9.0
-pydantic-settings==2.5.0
-python-dotenv==1.0.1
+# ─── Configuration & Environment ──────────────────────────────────────────────
+python-dotenv==1.1.0
+pydantic-dotenv==0.1.0
+confuse==2.0.1
+environs==11.4.0
+dynaconf==3.2.7
+toml==0.10.2
+ruamel.yaml==0.18.7
+tomli==2.1.0
+
+# ─── Logging & Monitoring ─────────────────────────────────────────────────────
 loguru==0.7.2
+python-json-logger==3.2.1
+sentry-sdk==2.4.0
+prometheus-client==0.21.0
+
+# ─── Utilities & Helpers ──────────────────────────────────────────────────────
 rich==13.7.0
+typer==0.15.0
+click==8.1.7
+colorama==0.4.6
+termcolor==2.4.0
+tabulate==0.9.0
+tqdm==4.67.1
+progressbar33==1.11.1
+python-dateutil==2.9.0
+arrow==1.3.0
+pendulum==3.0.0
+schedule==1.2.2
+APScheduler==3.10.4
+psutil==6.1.0
+py-cpuinfo==9.0.0
+gputil==1.4.0
+
+# ─── Email & Communication ────────────────────────────────────────────────────
+python-email-validator==2.2.1
+aiosmtplib==3.0.1
+email-validator==2.2.1
+
+# ─── Caching ───────────────────────────────────────────────────────────────────
+cachetools==5.5.0
+diskcache==5.6.3
+aiocache==0.12.3
+functools-lru-cache==1.6.6
+
+# ─── JSON & Data Serialization ────────────────────────────────────────────────
+orjson==3.10.11
+msgpack==1.1.0
+protobuf==5.28.2
+dataclasses-json==0.7.2
+
+# ─── Data Science & Analytics ─────────────────────────────────────────────────
+jupyter==1.1.1
+jupyterlab==4.3.2
+notebook==7.2.2
+ipython==8.23.0
+seaborn==0.13.2
+plotly==5.23.0
+dash==2.18.2
+streamlit==1.42.1
+bokeh==3.5.2
+
+# ─── Testing ───────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.25.2
+pytest-cov==6.0.0
+pytest-xdist==3.8.1
+pytest-timeout==2.1.0
+factory-boy==3.3.1
+faker==33.1.0
+hypothesis==6.120.0
+asgi-lifespan==2.1.0
+
+# ─── Code Quality & Linting ────────────────────────────────────────────────────
+ruff==0.9.2
+black==24.10.0
+isort==5.13.2
+pylint==3.3.1
+flake8==7.1.1
+autopep8==2.3.1
+pre-commit==4.0.1
+
+# ─── Type Checking ────────────────────────────────────────────────────────────
+mypy==1.14.1
+types-requests==2.31.0.20240902
+types-aiofiles==24.1.0.20241221
+
+# ─── Security & Validation ────────────────────────────────────────────────────
+bleach==6.2.0
+html5lib==1.1
+lxml==5.3.0
+xmltodict==14.2.0
+marshmallow==3.21.3
+cerberus==1.3.5
+
+# ─── Async & Concurrency ──────────────────────────────────────────────────────
+asyncio-contextmanager==1.0.0
+aiocontextvars==1.0.2
+anyio==4.8.0
+sniffio==1.3.2
+
+# ─── Documentation ────────────────────────────────────────────────────────────
+sphinx==8.2.1
+sphinx-rtd-theme==2.1.2
+sphinx-autodoc-typehints==2.5.0
+mkdocs==1.6.1
+mkdocs-material==9.5.48
+
+# ─── Dev Utilities ────────────────────────────────────────────────────────────
+ipdb==0.13.13
+pdbpp==0.10.3
+ptpython==3.0.29
+watchfiles==0.24.0
+watchdog==4.1.3
+reload==1.0.0
+
+# ─── Build & Package Management ────────────────────────────────────────────────
+setuptools==75.6.0
+wheel==0.45.1
+twine==6.0.0
+build==1.2.2.post1
+poetry==1.8.4
+
+# ─── Optional/Advanced Libraries ──────────────────────────────────────────────
+pydantic-core==2.27.1
+typing-extensions==4.12.2
 emoji==2.12.0
-psutil==6.0.0
-
-# ── Testing ───────────────────────────────────────────────────
-pytest==8.3.0
-pytest-asyncio==0.24.0
-pytest-cov==5.0.0
-httpx==0.27.0
-
-# ── Dev ───────────────────────────────────────────────────────
-black==24.8.0
-ruff==0.6.0
-mypy==1.11.0
+qrcode==8.0.0

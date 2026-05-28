@@ -2,17 +2,27 @@
 Flora Platform — Security (Core)
 =================================
 JWT token creation and verification, password hashing,
+token blacklisting, rate limiting, input sanitization,
 and security utilities.
 
 Uses:
 - python-jose for JWT (HS256/RS256)
-- bcrypt for password hashing
+- bcrypt for password hashing (12 rounds)
 - argon2-cffi as alternative password hasher
+- secrets for secure token generation
 """
+from __future__ import annotations
 
+import functools
+import html
 import logging
+import re
+import secrets
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from backend.config import settings
 
@@ -40,40 +50,59 @@ except ImportError:
     HAS_ARGON2 = False
 
 
+# ─── Token Blacklist (In-Memory) ──────────────────────────
+
+class TokenBlacklist:
+    """
+    In-memory token blacklist for logout.
+
+    Stores revoked token JTIs with automatic expiry cleanup.
+    For production, replace with Redis backend.
+    """
+
+    def __init__(self):
+        self._blacklist: dict[str, datetime] = {}
+
+    def add(self, jti: str, expires_at: datetime) -> None:
+        """Add a token JTI to the blacklist."""
+        self._blacklist[jti] = expires_at
+        self._cleanup()
+
+    def is_blacklisted(self, jti: str) -> bool:
+        """Check if a token JTI is blacklisted."""
+        self._cleanup()
+        return jti in self._blacklist
+
+    def _cleanup(self) -> None:
+        """Remove expired entries."""
+        now = datetime.now(timezone.utc)
+        expired = [jti for jti, exp in self._blacklist.items() if exp <= now]
+        for jti in expired:
+            del self._blacklist[jti]
+
+    def clear(self) -> None:
+        """Clear the entire blacklist (testing)."""
+        self._blacklist.clear()
+
+
+# Global blacklist instance
+_token_blacklist = TokenBlacklist()
+
+
+# ─── Security Manager ─────────────────────────────────────
+
+
 class SecurityManager:
-    """
-    Central security utility for Flora Platform.
+    """Central security manager for Flora Platform."""
 
-    Handles:
-    - JWT token creation and validation
-    - Password hashing and verification
-    - Token refresh logic
-    """
+    def __init__(self):
+        self._secret_key = settings.SECRET_KEY
+        self._algorithm = settings.JWT_ALGORITHM
+        self._access_expire = settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        self._refresh_expire = settings.REFRESH_TOKEN_EXPIRE_DAYS
+        self._blacklist_enabled = settings.TOKEN_BLACKLIST_ENABLED
 
-    def __init__(
-        self,
-        secret_key: Optional[str] = None,
-        algorithm: str = "HS256",
-        access_token_expire_minutes: int = 30,
-        refresh_token_expire_days: int = 7,
-    ):
-        self._secret_key = secret_key or settings.SECRET_KEY
-        self._algorithm = algorithm or settings.JWT_ALGORITHM
-        self._access_expire = access_token_expire_minutes
-        self._refresh_expire = refresh_token_expire_days
-
-        if not HAS_JOSE:
-            raise RuntimeError("python-jose[cryptography] is required for JWT operations")
-
-        if not self._secret_key or len(self._secret_key) < 32:
-            logger.warning(
-                "SEC_KEY is too short or empty. "
-                "Using a generated key — tokens will restart on deploy."
-            )
-            import secrets
-            self._secret_key = secrets.token_hex(32)
-
-    # ─── JWT Tokens ─────────────────────────────────────────────
+    # ─── JWT Token Creation ─────────────────────────────────────
 
     def create_access_token(
         self,
@@ -86,10 +115,10 @@ class SecurityManager:
         Create a JWT access token.
 
         Args:
-            user_id: The user's unique ID (stored in 'sub' claim)
-            role: User role (stored in 'role' claim)
-            extra_claims: Additional claims to include
-            expires_delta: Custom expiry (default: from config)
+            user_id: Subject identifier
+            role: User role (admin, user, etc.)
+            extra_claims: Additional JWT claims
+            expires_delta: Custom expiry duration
 
         Returns:
             Encoded JWT string
@@ -158,9 +187,12 @@ class SecurityManager:
         """
         Decode and validate a JWT token.
 
+        Also checks the blacklist if enabled.
+
         Returns the decoded payload.
 
         Raises:
+            TokenBlacklistedError: If token has been revoked
             TokenExpiredError: If token is expired
             TokenInvalidError: If token is malformed or signature is wrong
         """
@@ -170,11 +202,42 @@ class SecurityManager:
                 self._secret_key,
                 algorithms=[self._algorithm],
             )
-            return payload
         except jose_jwt.ExpiredSignatureError:
             raise TokenExpiredError("Token expirado")
         except JWTError as e:
-            raise TokenInvalidError(f"Token inválido: {e}")
+            raise TokenInvalidError(f"Token invalido: {e}")
+
+        # Check blacklist
+        if self._blacklist_enabled:
+            jti = payload.get("jti")
+            if jti and _token_blacklist.is_blacklisted(jti):
+                raise TokenBlacklistedError("Token foi revogado")
+
+        return payload
+
+    def revoke_token(self, token: str) -> None:
+        """
+        Revoke a token by adding its JTI to the blacklist.
+
+        Calculates expiry from the token's exp claim so the
+        blacklist entry auto-expires.
+        """
+        try:
+            # Decode without verification of expiry — we want to revoke even expired tokens
+            payload = jose_jwt.decode(
+                token,
+                self._secret_key,
+                algorithms=[self._algorithm],
+                options={"verify_exp": False},
+            )
+        except JWTError:
+            return
+
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        if jti and exp:
+            expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+            _token_blacklist.add(jti, expires_at)
 
     def refresh_access_token(self, refresh_token: str) -> dict:
         """
@@ -185,11 +248,11 @@ class SecurityManager:
         payload = self.decode_token(refresh_token)
 
         if payload.get("type") != "refresh":
-            raise TokenInvalidError("Token não é um refresh token")
+            raise TokenInvalidError("Token nao e um refresh token")
 
         user_id = payload.get("sub")
         if not user_id:
-            raise TokenInvalidError("Token sem identificador de usuário")
+            raise TokenInvalidError("Token sem identificador de usuario")
 
         return self.create_token_pair(user_id, role=payload.get("role", "user"))
 
@@ -207,7 +270,7 @@ class SecurityManager:
     @staticmethod
     def hash_password(password: str) -> str:
         """
-        Hash a password using bcrypt.
+        Hash a password using bcrypt with 12 rounds.
 
         Returns the hashed password string.
         """
@@ -249,19 +312,205 @@ class SecurityManager:
         except VerifyMismatchError:
             return False
 
+    # ─── Password Strength Validation ────────────────────────────
+
+    @staticmethod
+    def validate_password_strength(password: str) -> tuple[bool, list[str]]:
+        """
+        Validate password strength.
+
+        Returns:
+            (is_valid, list_of_errors)
+        """
+        errors: list[str] = []
+        cfg = settings
+
+        if len(password) < cfg.PASSWORD_MIN_LENGTH:
+            errors.append(f"Senha deve ter pelo menos {cfg.PASSWORD_MIN_LENGTH} caracteres")
+
+        if cfg.PASSWORD_REQUIRE_UPPERCASE and not re.search(r"[A-Z]", password):
+            errors.append("Senha deve conter pelo menos uma letra maiuscula")
+
+        if cfg.PASSWORD_REQUIRE_LOWERCASE and not re.search(r"[a-z]", password):
+            errors.append("Senha deve conter pelo menos uma letra minuscula")
+
+        if cfg.PASSWORD_REQUIRE_DIGITS and not re.search(r"\d", password):
+            errors.append("Senha deve conter pelo menos um numero")
+
+        if cfg.PASSWORD_REQUIRE_SPECIAL and not re.search(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?]", password):
+            errors.append("Senha deve conter pelo menos um caractere especial")
+
+        return (len(errors) == 0, errors)
+
+    # ─── API Key Generation ──────────────────────────────────────
+
+    @staticmethod
+    def generate_api_key() -> str:
+        """Generate a secure API key using secrets.token_urlsafe."""
+        return secrets.token_urlsafe(32)
+
+    @staticmethod
+    def generate_api_secret() -> str:
+        """Generate a secure API secret."""
+        return secrets.token_urlsafe(32)
+
+    # ─── Input Sanitization ──────────────────────────────────────
+
+    @staticmethod
+    def sanitize_html(value: str) -> str:
+        """
+        Sanitize input to prevent XSS attacks.
+
+        Escapes HTML entities and removes script tags.
+        """
+        if not value:
+            return value
+        # Remove script tags and their contents
+        value = re.sub(r"<script[^>]*>.*?</script>", "", value, flags=re.IGNORECASE | re.DOTALL)
+        # Remove event handlers
+        value = re.sub(r"on\w+\s*=", "", value, flags=re.IGNORECASE)
+        # Escape HTML entities
+        value = html.escape(value)
+        return value
+
+    @staticmethod
+    def sanitize_sql_input(value: str) -> str:
+        """
+        Basic SQL injection prevention.
+
+        Note: Parameterized queries are the primary defense.
+        This is an additional layer for logging/search fields.
+        """
+        if not value:
+            return value
+        # Remove common SQL injection patterns
+        dangerous = [
+            "--", ";--", "/*", "*/", "@@", "@",
+            "char(", "nchar(", "varchar(", "nvarchar(",
+            "alter ", "begin ", "cast ", "create ", "cursor ",
+            "declare ", "delete ", "drop ", "end ", "exec ",
+            "execute ", "fetch ", "insert ", "kill ", "open ",
+            "select ", "sys ", "table ", "update ",
+        ]
+        result = value
+        for pattern in dangerous:
+            result = re.sub(re.escape(pattern), "", result, flags=re.IGNORECASE)
+        return result.strip()
+
+    @staticmethod
+    def sanitize_input(value: str) -> str:
+        """Full input sanitization (XSS + SQL injection prevention)."""
+        value = SecurityManager.sanitize_html(value)
+        value = SecurityManager.sanitize_sql_input(value)
+        return value
+
     # ─── Utilities ───────────────────────────────────────────────
 
     @staticmethod
     def _generate_jti() -> str:
         """Generate a unique JWT ID."""
-        import secrets
         return secrets.token_urlsafe(16)
 
-    @staticmethod
-    def generate_api_secret() -> str:
-        """Generate a secure API secret."""
-        import secrets
-        return secrets.token_urlsafe(32)
+
+# ─── Rate Limiting Decorator ──────────────────────────────
+
+@dataclass
+class _RateLimitState:
+    """Track rate limit state per key."""
+    count: int = 0
+    window_start: float = 0.0
+
+
+def rate_limit(
+    max_requests: int = 100,
+    window_seconds: int = 60,
+    key_func: Optional[Callable] = None,
+):
+    """
+    Rate limiting decorator for endpoint functions.
+
+    Args:
+        max_requests: Maximum requests allowed per window
+        window_seconds: Time window in seconds
+        key_func: Function to extract rate limit key from args.
+                  Defaults to using the first string arg or 'default'.
+
+    Usage:
+        @rate_limit(max_requests=5, window_seconds=60)
+        async def login(request: Request, ...):
+            ...
+    """
+    _states: dict[str, _RateLimitState] = defaultdict(_RateLimitState)
+
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            if key_func:
+                key = key_func(*args, **kwargs)
+            else:
+                # Default: use first string arg or 'default'
+                key = "default"
+                for arg in args:
+                    if isinstance(arg, str):
+                        key = arg
+                        break
+
+            now = time.monotonic()
+            state = _states[key]
+
+            if now - state.window_start >= window_seconds:
+                state.count = 0
+                state.window_start = now
+
+            state.count += 1
+
+            if state.count > max_requests:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=429,
+                    detail="Limite de requisicoes excedido. Tente novamente em breve.",
+                )
+
+            return await func(*args, **kwargs)
+
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            if key_func:
+                key = key_func(*args, **kwargs)
+            else:
+                key = "default"
+                for arg in args:
+                    if isinstance(arg, str):
+                        key = arg
+                        break
+
+            now = time.monotonic()
+            state = _states[key]
+
+            if now - state.window_start >= window_seconds:
+                state.count = 0
+                state.window_start = now
+
+            state.count += 1
+
+            if state.count > max_requests:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=429,
+                    detail="Limite de requisicoes excedido. Tente novamente em breve.",
+                )
+
+            return func(*args, **kwargs)
+
+        import asyncio
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
+
+    return decorator
+
+
+# ─── Custom Exceptions ────────────────────────────────────
 
 
 class TokenError(Exception):
@@ -277,3 +526,74 @@ class TokenExpiredError(TokenError):
 class TokenInvalidError(TokenError):
     """Token is invalid."""
     pass
+
+
+class TokenBlacklistedError(TokenError):
+    """Token has been revoked/blacklisted."""
+    pass
+
+
+# ─── Module-Level Convenience Functions ───────────────────
+# These are used by auth_service.py and tests as bare imports.
+
+_singleton = SecurityManager()
+
+
+def create_access_token(user_id: str, role: str = "user", **extra_claims) -> str:
+    """Create a JWT access token. Thin wrapper around SecurityManager."""
+    return _singleton.create_access_token(user_id, role, extra_claims=extra_claims or None)
+
+
+def create_refresh_token(user_id: str) -> str:
+    """Create a JWT refresh token. Thin wrapper around SecurityManager."""
+    return _singleton.create_refresh_token(user_id)
+
+
+def create_token_pair(user_id: str, role: str = "user", **extra_claims) -> dict:
+    """Create access + refresh token pair. Thin wrapper around SecurityManager."""
+    return _singleton.create_token_pair(user_id, role, extra_claims=extra_claims or None)
+
+
+def decode_token(token: str) -> dict:
+    """Decode and validate a JWT token. Thin wrapper around SecurityManager."""
+    return _singleton.decode_token(token)
+
+
+def revoke_token(token: str) -> None:
+    """Revoke a token (add to blacklist). Thin wrapper around SecurityManager."""
+    _singleton.revoke_token(token)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash. Thin wrapper around SecurityManager."""
+    return _singleton.verify_password(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    """Hash a password using bcrypt. Thin wrapper around SecurityManager."""
+    return _singleton.hash_password(password)
+
+
+def validate_password_strength(password: str) -> tuple[bool, list[str]]:
+    """Validate password strength. Thin wrapper around SecurityManager."""
+    return _singleton.validate_password_strength(password)
+
+
+def generate_api_key() -> str:
+    """Generate a secure API key. Thin wrapper around SecurityManager."""
+    return _singleton.generate_api_key()
+
+
+def sanitize_input(value: str) -> str:
+    """Sanitize user input. Thin wrapper around SecurityManager."""
+    return _singleton.sanitize_input(value)
+
+
+def is_token_blacklisted(jti: str) -> bool:
+    """Check if a token JTI is blacklisted."""
+    return _token_blacklist.is_blacklisted(jti)
+
+
+def get_token_blacklist() -> TokenBlacklist:
+    """Get the global token blacklist instance."""
+    return _token_blacklist

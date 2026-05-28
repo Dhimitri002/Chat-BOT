@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 from .intents import IntentClassifier, IntentType
 from .context import ConversationContext
+from .prompts import HELP_CONTENT
 
 logger = logging.getLogger(__name__)
 
@@ -56,497 +57,546 @@ QUICK_REPLIES = {
         "Analisando... 🔍",
     ],
     "not_understood": [
-        "Hmm, não entendi muito bem. Pode reformular? 🤔",
-        "Desculpa, não peguei isso. Pode explicar de outro jeito? 😅",
-        "Não tenho certeza do que você quer dizer. Pode ser mais específico? 😊",
+        "Hmm, nao entendi muito bem. Pode reformular? 🤔",
+        "Desculpa, nao peguei isso. Pode explicar de outro jeito? 😅",
+        "Nao tenho certeza do que voce quer dizer. Pode ser mais especifico? 😊",
     ],
     "error": [
         "Opa, algo deu errado aqui. Tenta de novo? 🔧",
-        "Tive um probleminha técnico. Pode repetir? 😅",
+        "Tive um probleminha tecnico. Pode repetir? 😅",
         "Desculpa, falha minha! Tenta mais uma vez? 💪",
     ],
-    "success": [
-        "Pronto! Tudo certo! ✅",
-        "Feito! 🎉",
-        "Sucesso! 🚀",
-    ],
 }
 
-# Feature explanations
-FEATURES = {
-    "bot_creation": {
-        "title": "Criação de Bot",
-        "description": "Crie chatbots inteligentes para WhatsApp em minutos.",
-        "steps": [
-            "Defina o nome do seu bot",
-            "Escolha a personalidade",
-            "Configure as respostas automáticas",
-            "Conecte ao WhatsApp",
-            "Teste e publique!",
-        ],
-    },
-    "whatsapp_connection": {
-        "title": "Conexão WhatsApp",
-        "description": "Conecte seu número WhatsApp via QR Code.",
-        "steps": [
-            "Abra o WhatsApp no celular",
-            "Vá em Aparelhos Conectados",
-            "Toque em 'Conectar um aparelho'",
-            "Escaneie o QR Code gerado",
-            "Pronto! Seu bot está online!",
-        ],
-    },
-    "auto_reply": {
-        "title": "Respostas Automáticas",
-        "description": "Configure respostas automáticas baseadas em palavras-chave.",
-        "steps": [
-            "Vá em 'Respostas' no painel",
-            "Clique em 'Nova Resposta'",
-            "Defina a palavra-chave",
-            "Escreva a resposta",
-            "Salve e ative!",
-        ],
-    },
-    "analytics": {
-        "title": "Analytics",
-        "description": "Acompanhe métricas de uso e engajamento.",
-        "metrics": [
-            "Mensagens enviadas/recebidas",
-            "Usuários ativos",
-            "Horários de pico",
-            "Taxa de resposta",
-        ],
-    },
-}
+# ─── Plan Information ──────────────────────────────────────────────────
 
-# Plan descriptions
 PLANS = {
     "free": {
         "name": "Free",
-        "price": "R$0/mês",
-        "emoji": "🆓",
-        "features": [
-            "100 mensagens/mês",
-            "1 bot",
-            "Respostas básicas",
-            "Suporte por email",
-        ],
+        "price": "R$0/mes",
+        "messages": "100 msgs/mes",
+        "bots": "1 bot",
+        "features": ["Suporte basico", "100 mensagens/mes", "1 bot", "Sem IA avancada"],
     },
     "starter": {
         "name": "Starter",
-        "price": "R$29/mês",
-        "emoji": "🌱",
-        "features": [
-            "1.000 mensagens/mês",
-            "2 bots",
-            "Respostas inteligentes",
-            "Suporte prioritário",
-        ],
+        "price": "R$29/mes",
+        "messages": "1.000 msgs/mes",
+        "bots": "2 bots",
+        "features": ["Suporte por email", "1.000 mensagens/mes", "2 bots", "Intencoes basicas"],
     },
     "growth": {
         "name": "Growth",
-        "price": "R$79/mês",
-        "emoji": "🚀",
-        "features": [
-            "5.000 mensagens/mês",
-            "5 bots",
-            "IA avançada",
-            "Analytics completo",
-            "Suporte 24/7",
-        ],
+        "price": "R$79/mes",
+        "messages": "5.000 msgs/mes",
+        "bots": "5 bots",
+        "features": ["Suporte prioritario", "5.000 mensagens/mes", "5 bots", "IA avancada", "API basica"],
     },
     "pro": {
         "name": "Pro",
-        "price": "R$149/mês",
-        "emoji": "💼",
-        "features": [
-            "15.000 mensagens/mês",
-            "10 bots",
-            "IA personalizada",
-            "API access",
-            "Webhook support",
-        ],
+        "price": "R$149/mes",
+        "messages": "15.000 msgs/mes",
+        "bots": "10 bots",
+        "features": ["Suporte 24/7", "15.000 mensagens/mes", "10 bots", "IA avancada", "API completa", "Webhooks"],
     },
     "business": {
         "name": "Business",
-        "price": "R$299/mês",
-        "emoji": "🏢",
-        "features": [
-            "50.000 mensagens/mês",
-            "25 bots",
-            "Multi-usuário",
-            "White-label",
-            "SLA garantido",
-        ],
+        "price": "R$299/mes",
+        "messages": "50.000 msgs/mes",
+        "bots": "25 bots",
+        "features": ["Suporte dedicado", "50.000 mensagens/mes", "25 bots", "White-label", "API completa", "Webhooks", "Multi-usuario"],
     },
     "enterprise": {
         "name": "Enterprise",
-        "price": "R$599/mês",
-        "emoji": "👑",
-        "features": [
-            "200.000 mensagens/mês",
-            "Bots ilimitados",
-            "Infraestrutura dedicada",
-            "Account manager",
-            "SLA 99.9%",
-        ],
+        "price": "R$599/mes",
+        "messages": "200.000 msgs/mes",
+        "bots": "Ilimitados",
+        "features": ["Suporte VIP", "200.000 mensagens/mes", "Bots ilimitados", "White-label", "SLA 99.9%", "On-premise opcional"],
     },
     "custom": {
         "name": "Custom",
         "price": "Sob consulta",
-        "emoji": "💎",
-        "features": [
-            "Mensagens ilimitadas",
-            "Bots ilimitados",
-            "Infraestrutura customizada",
-            "Integrações sob medida",
-            "Suporte dedicado 24/7",
-        ],
+        "messages": "Ilimitado",
+        "bots": "Ilimitados",
+        "features": ["Tudo do Enterprise", "Infraestrutura dedicada", "Treinamento personalizado", "Integracoes customizadas"],
     },
 }
 
-# Onboarding steps
+# ─── Onboarding Steps ──────────────────────────────────────────────────
+
 ONBOARDING_STEPS = [
     {
         "step": 1,
         "title": "Criar Conta",
-        "description": "Registre-se na Flora Platform",
-        "action": "Acesse flora.platform e crie sua conta gratuita",
-        "emoji": "📝",
+        "description": "Crie sua conta na Flora Platform",
+        "action": "create_account",
+        "emoji": "1️⃣",
     },
     {
         "step": 2,
-        "title": "Criar Bot",
-        "description": "Configure seu primeiro chatbot",
-        "action": "No painel, clique em 'Novo Bot' e defina nome e personalidade",
-        "emoji": "🤖",
+        "title": "Escolher Plano",
+        "description": "Selecione o plano ideal para voce",
+        "action": "choose_plan",
+        "emoji": "2️⃣",
     },
     {
         "step": 3,
-        "title": "Conectar WhatsApp",
-        "description": "Vincule seu número ao bot",
-        "action": "Escaneie o QR Code gerado com seu WhatsApp",
-        "emoji": "📱",
+        "title": "Criar Bot",
+        "description": "Configure seu primeiro chatbot",
+        "action": "create_bot",
+        "emoji": "3️⃣",
     },
     {
         "step": 4,
-        "title": "Configurar Respostas",
-        "description": "Defina as respostas automáticas",
-        "action": "Configure palavras-chave e respostas no painel",
-        "emoji": "💬",
+        "title": "Definir Personalidade",
+        "description": "Personalize a personalidade do seu bot",
+        "action": "set_personality",
+        "emoji": "4️⃣",
     },
     {
         "step": 5,
-        "title": "Testar",
-        "description": "Envie mensagens de teste",
-        "action": "Envie uma mensagem para o número conectado e veja a resposta",
-        "emoji": "🧪",
+        "title": "Conectar WhatsApp",
+        "description": "Conecte seu numero via QR Code",
+        "action": "connect_whatsapp",
+        "emoji": "5️⃣",
     },
     {
         "step": 6,
-        "title": "Publicar",
-        "description": "Coloque seu bot no ar!",
-        "action": "Ative o bot e comece a atender seus clientes",
-        "emoji": "🚀",
+        "title": "Ativar e Testar",
+        "description": "Ative o bot e faca testes",
+        "action": "activate_bot",
+        "emoji": "6️⃣",
     },
 ]
 
 
 class FloraBrain:
     """
-    Flora AI's core brain — handles personality, greetings, help,
-    and response generation.
+    Core brain of Flora AI.
+
+    Handles:
+    - Intent classification
+    - Response generation with personality
+    - Context-aware conversations
+    - Fallback responses
     """
 
-    def __init__(self, intents_file: Optional[str] = None):
-        self.personality = PERSONALITY
-        self.intents_file = intents_file or str(INTENTS_FILE)
-        self.classifier = IntentClassifier(self.intents_file)
-        self._intents_data = self._load_intents()
-        logger.info("FloraBrain initialized", extra={"intents_file": self.intents_file})
+    def __init__(self):
+        self.classifier = IntentClassifier()
+        self._load_intents()
+        logger.info("FloraBrain initialized with personality: %s", PERSONALITY["tone"])
 
-    def _load_intents(self) -> dict:
+    def _load_intents(self) -> None:
         """Load intents from JSON file."""
         try:
-            with open(self.intents_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to load intents: {e}")
-            return {"intents": []}
+            if INTENTS_FILE.exists():
+                with open(INTENTS_FILE, "r", encoding="utf-8") as f:
+                    self.intents_data = json.load(f)
+            else:
+                self.intents_data = {"intents": []}
+                logger.warning("intents.json not found, using empty intents")
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error("Failed to load intents: %s", e)
+            self.intents_data = {"intents": []}
 
-    def greet(self, user_name: str = "", is_returning: bool = False) -> str:
+    def classify_and_respond(
+        self,
+        message: str,
+        context: Optional[ConversationContext] = None,
+    ) -> str:
         """
-        Generate a greeting message.
-
-        Args:
-            user_name: User's name (if known)
-            is_returning: Whether the user has interacted before
-        """
-        hour = datetime.now().hour
-
-        if hour < 12:
-            time_greeting = "Bom dia"
-        elif hour < 18:
-            time_greeting = "Boa tarde"
-        else:
-            time_greeting = "Boa noite"
-
-        name_part = f", {user_name}" if user_name else ""
-
-        if is_returning:
-            greetings = [
-                f"Que bom te ver de volta{name_part}! {PERSONALITY['emoji']} Como posso ajudar?",
-                f"Oi{name_part}! {PERSONALITY['emoji']} De volta? O que precisa?",
-                f"Eae{name_part}! Sentiu minha falta? 😄 O que posso fazer por você?",
-            ]
-        else:
-            greetings = [
-                f"{time_greeting}{name_part}! {PERSONALITY['emoji']} Sou a Flora, sua assistente. Como posso ajudar?",
-                f"Oi{name_part}! {PERSONALITY['emoji']} Bem-vindo! Sou a Flora, o que você precisa?",
-                f"{time_greeting}{name_part}! {PERSONALITY['emoji']} Flora aqui! Me diz o que precisa que eu te ajudo!",
-            ]
-
-        return random.choice(greetings)
-
-    def farewell(self, user_name: str = "") -> str:
-        """Generate a farewell message."""
-        name_part = f", {user_name}" if user_name else ""
-        farewells = [
-            f"Até mais{name_part}! {PERSONALITY['emoji']} Foi um prazer ajudar!",
-            f"Tchau{name_part}! Quando precisar, é só chamar {PERSONALITY['emoji']}",
-            f"Falou{name_part}! Estou aqui se precisar 👋",
-            f"Valeu{name_part}! Até a próxima! {PERSONALITY['emoji']}",
-        ]
-        return random.choice(farewells)
-
-    def help(self, topic: str = "general") -> str:
-        """
-        Generate help content for a specific topic.
-
-        Args:
-            topic: Help topic (general, bot_config, whatsapp, plans, onboarding)
-        """
-        if topic == "general":
-            return (
-                f"{PERSONALITY['emoji']} *Central de Ajuda - Flora Platform*\n\n"
-                "Posso te ajudar com:\n\n"
-                "1️⃣ *Criar Bot* — Configure seu chatbot\n"
-                "2️⃣ *Conectar WhatsApp* — Vincule seu número\n"
-                "3️⃣ *Planos* — Conheça nossos planos\n"
-                "4️⃣ *Onboarding* — Guia passo a passo\n"
-                "5️⃣ *Suporte* — Resolva problemas\n\n"
-                "Digite o número ou me diga o que precisa! 😊"
-            )
-        elif topic == "bot_config":
-            feature = FEATURES["bot_creation"]
-            steps = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(feature["steps"]))
-            return (
-                f"{PERSONALITY['emoji']} *{feature['title']}*\n\n"
-                f"{feature['description']}\n\n"
-                f"*Passo a passo:*\n{steps}\n\n"
-                "Quer que eu te guie em algum passo específico? 😊"
-            )
-        elif topic == "whatsapp":
-            feature = FEATURES["whatsapp_connection"]
-            steps = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(feature["steps"]))
-            return (
-                f"{PERSONALITY['emoji']} *{feature['title']}*\n\n"
-                f"{feature['description']}\n\n"
-                f"*Como conectar:*\n{steps}\n\n"
-                "Tendo problemas? Me conta o erro que eu te ajudo! 🔧"
-            )
-        elif topic == "plans":
-            lines = [f"{PERSONALITY['emoji']} *Nossos Planos*\n"]
-            for key, plan in PLANS.items():
-                features = "\n".join(f"  • {f}" for f in plan["features"])
-                lines.append(
-                    f"{plan['emoji']} *{plan['name']}* — {plan['price']}\n{features}\n"
-                )
-            lines.append("Quer detalhes de algum plano? É só pedir! 😊")
-            return "\n".join(lines)
-        elif topic == "onboarding":
-            lines = [f"{PERSONALITY['emoji']} *Guia de Onboarding*\n"]
-            for step in ONBOARDING_STEPS:
-                lines.append(
-                    f"{step['emoji']} *Passo {step['step']}: {step['title']}*\n"
-                    f"_{step['description']}_\n"
-                    f"  {step['action']}\n"
-                )
-            lines.append("Por qual passo quer começar? 🚀")
-            return "\n".join(lines)
-        else:
-            return self.help("general")
-
-    def get_plan_info(self, plan_name: str) -> str:
-        """Get detailed info about a specific plan."""
-        plan_key = plan_name.lower().strip()
-        plan = PLANS.get(plan_key)
-
-        if not plan:
-            available = ", ".join(p.title() for p in PLANS.keys())
-            return (
-                f"Não encontrei o plano '{plan_name}'. {PERSONALITY['emoji']}\n\n"
-                f"Planos disponíveis: {available}\n"
-                "Quer detalhes de qual plano? 😊"
-            )
-
-        features = "\n".join(f"  • {f}" for f in plan["features"])
-        return (
-            f"{plan['emoji']} *Plano {plan['name']}*\n"
-            f"💰 {plan['price']}\n\n"
-            f"*Recursos:*\n{features}\n\n"
-            f"Quer saber mais ou fazer upgrade? {PERSONALITY['emoji']}"
-        )
-
-    def classify_and_respond(self, message: str, context: Optional[ConversationContext] = None) -> str:
-        """
-        Classify the user's intent and generate an appropriate response.
+        Classify the user message and generate an appropriate response.
 
         Args:
             message: User's message text
             context: Optional conversation context
 
         Returns:
-            Flora's response string
+            Flora's response text
         """
+        if not message or not message.strip():
+            return random.choice(QUICK_REPLIES["not_understood"])
+
+        message_lower = message.strip().lower()
+
         # Classify intent
-        intent = self.classifier.classify(message)
-        logger.debug(f"Classified intent: {intent}", extra={"message": message[:50]})
+        intent_type, confidence = self.classifier.classify_with_confidence(message_lower)
 
-        # Get response based on intent
-        if intent == IntentType.GREETING:
-            user_name = context.user_name if context else ""
-            is_returning = context.message_count > 0 if context else False
-            return self.greet(user_name, is_returning)
+        # Check if user is in onboarding flow
+        if context and context.is_onboarding:
+            return self._handle_onboarding(message_lower, context)
 
-        elif intent == IntentType.FAREWELL:
-            user_name = context.user_name if context else ""
-            return self.farewell(user_name)
+        # Route to appropriate handler
+        handler_map = {
+            IntentType.GREETING: self._handle_greeting,
+            IntentType.FAREWELL: self._handle_farewell,
+            IntentType.HELP: self._handle_help,
+            IntentType.THANK_YOU: self._handle_thank_you,
+            IntentType.BOT_CONFIG: self._handle_bot_config,
+            IntentType.WHATSAPP_CONNECTION: self._handle_whatsapp,
+            IntentType.PLANS: self._handle_plans,
+            IntentType.ONBOARDING: self._handle_onboarding_start,
+            IntentType.TECH_SUPPORT: self._handle_tech_support,
+            IntentType.ABOUT_FLORA: self._handle_about,
+            IntentType.SUPPORT: self._handle_support,
+            IntentType.COMPLAINT: self._handle_complaint,
+            IntentType.COMPLIMENT: self._handle_compliment,
+            IntentType.JOKE: self._handle_joke,
+            IntentType.STATUS: self._handle_status,
+        }
 
-        elif intent == IntentType.HELP:
-            return self.help("general")
+        handler = handler_map.get(intent_type, self._handle_unknown)
+        return handler(message_lower, context)
 
-        elif intent == IntentType.BOT_CONFIG:
-            return self.help("bot_config")
+    def _handle_greeting(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle greeting intents."""
+        name = context.user_name if context else ""
 
-        elif intent == IntentType.WHATSAPP_CONNECTION:
-            return self.help("whatsapp")
-
-        elif intent == IntentType.PLANS:
-            return self.help("plans")
-
-        elif intent == IntentType.ONBOARDING:
-            return self.help("onboarding")
-
-        elif intent == IntentType.THANK_YOU:
-            return random.choice(QUICK_REPLIES["success"])
-
-        elif intent == IntentType.TECH_SUPPORT:
-            return (
-                f"Poxa, sinto muito pelo problema! {PERSONALITY['emoji']}\n\n"
-                "Me descreve o que está acontecendo:\n"
-                "• O que você estava fazendo?\n"
-                "• Apareceu alguma mensagem de erro?\n"
-                "• Quando começou?\n\n"
-                "Vou te ajudar a resolver! 🛠️"
-            )
-
-        elif intent == IntentType.ABOUT_FLORA:
-            return (
-                f"Sou a *Flora*! {PERSONALITY['emoji']}\n\n"
-                "Sou a assistente virtual da Flora Platform. "
-                "Meu trabalho é te ajudar a:\n"
-                "• Criar e configurar bots\n"
-                "• Conectar ao WhatsApp\n"
-                "• Entender nossos planos\n"
-                "• Resolver problemas\n\n"
-                "Estou aqui 24/7 para te ajudar! O que precisa? 😊"
-            )
-
-        elif intent == IntentType.SUPPORT:
-            return (
-                f"{PERSONALITY['emoji']} *Canais de Suporte*\n\n"
-                "📧 Email: suporte@flora.platform\n"
-                "💬 Chat: Disponível no painel admin\n"
-                "🕐 Horário: Seg-Sex 9h-18h\n\n"
-                "Mas antes, posso tentar te ajudar aqui! O que precisa? 😊"
-            )
-
-        elif intent == IntentType.COMPLAINT:
-            return (
-                f"Poxa, sinto muito que sua experiência não foi boa 😔\n\n"
-                f"Me conta o que aconteceu para que eu possa te ajudar a melhorar isso? "
-                f"Seu feedback é muito importante! {PERSONALITY['emoji']}"
-            )
-
-        elif intent == IntentType.COMPLIMENT:
+        # Check if returning user (has history)
+        if context and context.message_count > 0:
+            if name:
+                return random.choice([
+                    f"Ola novamente, {name}! Bom te ver de volta 🌸 Em que posso ajudar?",
+                    f"Oi {name}! Que bom que voltou! Como posso te ajudar hoje? 😊",
+                    f"E ai, {name}! De novo por aqui? Manda a duvida! 💪",
+                ])
             return random.choice([
-                "Ah, que gentil! Fico muito feliz! 🥰",
-                "Obrigada! Isso me motiva a ser cada vez melhor! 💚",
-                "Você é um amor! Obrigada pelo elogio! 🌸",
+                "Ola novamente! Bom te ver de volta 🌸 Em que posso ajudar?",
+                "Oi! Que bom que voltou! Como posso te ajudar hoje? 😊",
+                "E ai! De novo por aqui? Manda a duvida! 💪",
             ])
 
-        elif intent == IntentType.JOKE:
-            jokes = [
-                "Por que o programador usa óculos? Porque não consegue C! 😂\n\nMas sério, como posso te ajudar? 😄",
-                "O que o zero disse para o oito? \"Belo cinto!\" 😂\n\nE aí, melhorou? O que posso fazer? 😊",
-                "Por que o WhatsApp foi ao psicólogo? Porque tinha muitas conexões! 😂😂\n\nBrincadeiras à parte, precisa de algo? 🌸",
-            ]
-            return random.choice(jokes)
+        # New user
+        if name:
+            return random.choice([
+                f"Ola, {name}! Sou a Flora, sua assistente virtual 🌸 Como posso te ajudar hoje?",
+                f"Oi {name}! Bem-vindo a Flora Platform! Sou a Flora, prazer! 😊 Em que posso ajudar?",
+                f"Ola {name}! Que bom ter voce aqui! Sou a Flora 🌸 Me diz o que precisa!",
+            ])
+        return random.choice([
+            "Ola! Sou a Flora, sua assistente virtual da Flora Platform 🌸 Como posso te ajudar?",
+            "Oi! Bem-vindo! Sou a Flora, prazer! 😊 Em que posso te ajudar hoje?",
+            "Ola! Que bom ter voce aqui! Sou a Flora 🌸 Me diz o que precisa!",
+        ])
 
-        elif intent == IntentType.STATUS:
-            return (
-                f"{PERSONALITY['emoji']} Para verificar o status do seu bot:\n\n"
-                "1. Acesse o painel admin\n"
-                "2. Vá em 'Meus Bots'\n"
-                "3. Veja o indicador de status\n\n"
-                "🟢 Verde = Conectado\n"
-                "🔴 Vermelho = Desconectado\n"
-                "🟡 Amarelo = Conectando\n\n"
-                "Quer ajuda com algo específico? 😊"
-            )
+    def _handle_farewell(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle farewell intents."""
+        name = context.user_name if context else ""
+        if name:
+            return random.choice([
+                f"Até mais, {name}! Foi um prazer ajudar 👋 Quando precisar, estou aqui!",
+                f"Tchau {name}! Qualquer duvida, é só voltar 😊🌸",
+                f"Falou, {name}! Cuide-se! Estou aqui se precisar 💚",
+            ])
+        return random.choice([
+            "Até mais! Foi um prazer ajudar 👋 Quando precisar, estou aqui!",
+            "Tchau! Qualquer duvida, é só voltar 😊🌸",
+            "Falou! Cuide-se! Estou aqui se precisar 💚",
+        ])
 
-        else:
-            # Fallback — try to match against intents.json patterns
-            return self._match_intent_response(message)
-
-    def _match_intent_response(self, message: str) -> str:
-        """Fallback: match message against intents.json patterns."""
-        msg_lower = message.lower().strip()
-
-        for intent in self._intents_data.get("intents", []):
-            for pattern in intent.get("patterns", []):
-                if pattern.lower() in msg_lower:
-                    responses = intent.get("responses", [])
-                    if responses:
-                        return random.choice(responses)
-
-        # Ultimate fallback
-        return random.choice(QUICK_REPLIES["not_understood"])
-
-    def get_feature_explanation(self, feature_key: str) -> str:
-        """Get explanation for a specific feature."""
-        feature = FEATURES.get(feature_key)
-        if not feature:
-            available = ", ".join(FEATURES.keys())
-            return f"Não encontrei '{feature_key}'. Features disponíveis: {available}"
-
-        steps = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(feature.get("steps", [])))
+    def _handle_help(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle help requests."""
         return (
-            f"{PERSONALITY['emoji']} *{feature['title']}*\n\n"
-            f"{feature['description']}\n\n"
-            f"*Como funciona:*\n{steps}"
+            "Claro! Posso te ajudar com varias coisas:\n\n"
+            "1️⃣ *Criar e configurar bots*\n"
+            "2️⃣ *Conectar ao WhatsApp*\n"
+            "3️⃣ *Explicar os planos*\n"
+            "4️⃣ *Resolver problemas tecnicos*\n"
+            "5️⃣ *Guia de onboarding*\n\n"
+            "Digite o numero ou me diga o que precisa! 😊"
         )
 
-    def get_onboarding_step(self, step_number: int) -> str:
-        """Get a specific onboarding step."""
-        for step in ONBOARDING_STEPS:
-            if step["step"] == step_number:
+    def _handle_thank_you(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle thank you messages."""
+        return random.choice([
+            "De nada! Sempre que precisar 😊🌸",
+            "Que bom que pude ajudar! E pra isso que estou aqui 😄",
+            "Magina! Qualquer coisa é só chamar 👍",
+            "Fico feliz em ajudar! 💚",
+            "Disponivel! Estou sempre aqui 🌸",
+        ])
+
+    def _handle_bot_config(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle bot configuration questions."""
+        return (
+            "Para configurar seu bot, siga estes passos:\n\n"
+            "1️⃣ Va em *Meus Bots* e clique em *Criar Bot*\n"
+            "2️⃣ Defina o *nome* e a *personalidade* do bot\n"
+            "3️⃣ Adicione *intencoes* (o que o bot deve entender)\n"
+            "4️⃣ Configure as *respostas* para cada intencao\n"
+            "5️⃣ *Ative* o bot e comece a usar!\n\n"
+            "Quer que eu te guie em algum passo especifico? 🌸"
+        )
+
+    def _handle_whatsapp(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle WhatsApp connection questions."""
+        # Check for specific sub-questions
+        if any(word in message for word in ["qr", "qrcode", "codigo", "scan"]):
+            return (
+                "Para escanear o QR Code:\n\n"
+                "1️⃣ Va em *WhatsApp > Conexoes*\n"
+                "2️⃣ Clique em *Conectar Numero*\n"
+                "3️⃣ Abra o *WhatsApp* no celular\n"
+                "4️⃣ Va em *Aparelhos Conectados*\n"
+                "5️⃣ Toque em *Conectar Aparelho*\n"
+                "6️⃣ Escaneie o QR Code na tela\n\n"
+                "O QR Code expira em 30 segundos. Se expirar, clique em *Gerar Novo* 🔄"
+            )
+
+        if any(word in message for word in ["desconectou", "caiu", "saiu", "offline", "erro", "problema"]):
+            return (
+                "Se o WhatsApp desconectou, calma! Vamos resolver:\n\n"
+                "1️⃣ Verifique sua *internet*\n"
+                "2️⃣ O celular precisa estar *conectado* ao WhatsApp\n"
+                "3️⃣ Va em *WhatsApp > Conexoes* e clique em *Reconectar*\n"
+                "4️⃣ Se nao funcionar, *desconecte* e conecte novamente\n\n"
+                "Ainda com problemas? Me conta mais detalhes 🔧"
+            )
+
+        return (
+            "Para conectar seu WhatsApp:\n\n"
+            "1️⃣ Va em *WhatsApp > Conexoes* no painel\n"
+            "2️⃣ Clique em *Conectar Numero*\n"
+            "3️⃣ Escaneie o QR Code com seu celular\n"
+            "4️⃣ Pronto! Seu bot ja esta conectado ✅\n\n"
+            "O celular precisa ficar conectado ao internet para o bot funcionar 📱\n\n"
+            "Quer saber mais sobre algum passo? 🌸"
+        )
+
+    def _handle_plans(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle plan-related questions."""
+        # Check for specific plan mentions
+        for plan_key, plan_data in PLANS.items():
+            if plan_key in message:
+                features = "\n".join(f"  ✅ {f}" for f in plan_data["features"])
+                return (
+                    f"*{plan_data['name']}* — {plan_data['price']}\n\n"
+                    f"📊 {plan_data['messages']}\n"
+                    f"🤖 {plan_data['bots']}\n\n"
+                    f"*Recursos:*\n{features}\n\n"
+                    f"Quer fazer upgrade? Me avisa! 🚀"
+                )
+
+        # Check for upgrade intent
+        if any(word in message for word in ["upgrade", "trocar", "mudar", "melhorar", "assinar"]):
+            return (
+                "Para fazer upgrade do seu plano:\n\n"
+                "1️⃣ Va em *Configuracoes > Assinatura*\n"
+                "2️⃣ Escolha o plano desejado\n"
+                "3️⃣ Confirme o pagamento\n\n"
+                "Aceitamos *Pix*, *cartao de credito* e *boleto* 💳\n\n"
+                "Qual plano te interessa? 🌸"
+            )
+
+        # General plan overview
+        plan_lines = []
+        for key, data in PLANS.items():
+            plan_lines.append(f"*{data['name']}* — {data['price']} ({data['messages']}, {data['bots']})")
+
+        plans_text = "\n".join(plan_lines)
+        return (
+            "Aqui estao os planos disponiveis:\n\n"
+            f"{plans_text}\n\n"
+            "Todos os planos incluem *7 dias de teste gratis* 🎉\n\n"
+            "Qual plano te interessa? Posso detalhar qualquer um! 😊"
+        )
+
+    def _handle_onboarding_start(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle onboarding start requests."""
+        if context:
+            context.is_onboarding = True
+            context.onboarding_step = 1
+
+        return (
+            "Vou te guiar na sua jornada na Flora Platform! 🌸\n\n"
+            "Aqui estao os passos:\n\n"
+            f"{ONBOARDING_STEPS[0]['emoji']} *{ONBOARDING_STEPS[0]['title']}* — {ONBOARDING_STEPS[0]['description']}\n"
+            f"{ONBOARDING_STEPS[1]['emoji']} *{ONBOARDING_STEPS[1]['title']}* — {ONBOARDING_STEPS[1]['description']}\n"
+            f"{ONBOARDING_STEPS[2]['emoji']} *{ONBOARDING_STEPS[2]['title']}* — {ONBOARDING_STEPS[2]['description']}\n"
+            f"{ONBOARDING_STEPS[3]['emoji']} *{ONBOARDING_STEPS[3]['title']}* — {ONBOARDING_STEPS[3]['description']}\n"
+            f"{ONBOARDING_STEPS[4]['emoji']} *{ONBOARDING_STEPS[4]['title']}* — {ONBOARDING_STEPS[4]['description']}\n"
+            f"{ONBOARDING_STEPS[5]['emoji']} *{ONBOARDING_STEPS[5]['title']}* — {ONBOARDING_STEPS[5]['description']}\n\n"
+            "Vamos comecar pelo primeiro passo? Me diz *comecar*! 🚀"
+        )
+
+    def _handle_onboarding(self, message: str, context: ConversationContext) -> str:
+        """Handle onboarding flow progression."""
+        current_step = context.onboarding_step
+
+        # Check for advancement keywords
+        advance_keywords = ["proximo", "avancar", "continuar", "sim", "vamos", "comecar", "ok", "beleza", "pronto", "feito"]
+        if any(kw in message for kw in advance_keywords):
+            if current_step < 6:
+                context.onboarding_step = current_step + 1
+                step = ONBOARDING_STEPS[current_step]  # 0-indexed, so current_step is next
                 return (
                     f"{step['emoji']} *Passo {step['step']}: {step['title']}*\n\n"
-                    f"_{step['description']}_\n\n"
-                    f"*Ação:* {step['action']}\n\n"
-                    f"{'✅ Passo concluído! Parabéns!' if step_number < 6 else '🎉 Onboarding completo!'}\n"
-                    f"{'Próximo passo: digite \"próximo\"' if step_number < 6 else ''}"
+                    f"{step['description']}\n\n"
+                    f"Quando terminar, me diz *proximo* para continuar! 😊"
                 )
-        return f"Passo {step_number} não encontrado. O onboarding tem {len(ONBOARDING_STEPS)} passos."
+            else:
+                context.is_onboarding = False
+                return (
+                    "Parabens! Voce completou todo o onboarding! 🎉🌸\n\n"
+                    "Seu bot esta pronto para usar! Se tiver qualquer duvida, estou aqui.\n\n"
+                    "Boa sorte com seu chatbot! 🚀"
+                )
+
+        # Stay on current step
+        if 1 <= current_step <= 6:
+            step = ONBOARDING_STEPS[current_step - 1]
+            return (
+                f"Voce esta no passo {step['step']}: *{step['title']}*\n\n"
+                f"{step['description']}\n\n"
+                "Me diz *proximo* quando estiver pronto para avancar! 😊"
+            )
+
+        return self._handle_onboarding_start(message, context)
+
+    def _handle_tech_support(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle technical support requests."""
+        # Bot not responding
+        if any(word in message for word in ["nao responde", "nao funciona", "parado", "travou", "bug"]):
+            return (
+                "Vamos resolver isso! 🔧\n\n"
+                "1️⃣ Verifique se o bot esta *ativo*\n"
+                "2️⃣ Confirme que o *WhatsApp esta conectado*\n"
+                "3️⃣ Verifique se as *intencoes* estao configuradas\n"
+                "4️⃣ Tente *reiniciar* o bot\n\n"
+                "Se ainda nao funcionar, me conta: qual e o erro exato? 🤔"
+            )
+
+        # Connection issues
+        if any(word in message for word in ["conexao", "conectar", "internet", "rede"]):
+            return (
+                "Problemas de conexao? Vamos la:\n\n"
+                "1️⃣ Verifique sua *internet*\n"
+                "2️⃣ O servidor da Flora pode estar em manutencao\n"
+                "3️⃣ Tente *desconectar e reconectar* o WhatsApp\n\n"
+                "Status da plataforma: *Online* ✅\n\n"
+                "Ainda com problemas? Me conta mais detalhes 🔧"
+            )
+
+        return (
+            "Estou aqui para ajudar com problemas tecnicos! 🔧\n\n"
+            "Me conta o que esta acontecendo:\n"
+            "- O que voce estava fazendo?\n"
+            "- Qual erro apareceu?\n"
+            "- Quando comecou o problema?\n\n"
+            "Quanto mais detalhes, melhor! 💪"
+        )
+
+    def _handle_about(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle questions about Flora herself."""
+        return (
+            "Ola! Sou a *Flora* 🌸, assistente virtual da Flora Platform!\n\n"
+            "Fui criada para te ajudar com:\n"
+            "🤖 Criacao e configuracao de chatbots\n"
+            "📱 Conexao com WhatsApp\n"
+            "💡 Dicas e tutoriais\n"
+            "🔧 Suporte tecnico\n\n"
+            "Estou aqui 24/7 para te ajudar! Me diz o que precisa 😊"
+        )
+
+    def _handle_support(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle support requests."""
+        return (
+            "Vou te direcionar para o suporte humano! 👥\n\n"
+            "Enquanto isso, me conta:\n"
+            "- Qual e o problema?\n"
+            "- Ha quanto tempo esta acontecendo?\n"
+            "- Ja tentou alguma solucao?\n\n"
+            "Voce tambem pode enviar um email para *suporte@floraplatform.com* 📧\n\n"
+            "Tempo medio de resposta: *2 horas* ⚡"
+        )
+
+    def _handle_complaint(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle user complaints with empathy."""
+        return (
+            "Poxa, sinto muito que voce esta passando por isso 😔\n\n"
+            "Quero resolver isso para voce! Me conta mais detalhes:\n"
+            "- O que aconteceu?\n"
+            "- Quando comecou?\n"
+            "- Como isso te afetou?\n\n"
+            "Vou fazer o possivel para ajudar! 💪"
+        )
+
+    def _handle_compliment(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle compliments."""
+        return random.choice([
+            "Ah, que gentil! Muito obrigada! 🌸😊",
+            "Valeu! Fico feliz em saber! 💚",
+            "Isso me faz muito bem! Obrigada! 😄🌸",
+            "Que amor! Voce tambem e demais! 💖",
+        ])
+
+    def _handle_joke(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle joke requests."""
+        jokes = [
+            "Por que o programador usa oculos? Porque ele nao consegue C#! 😂\n\nMas falando serio, como posso te ajudar? 🌸",
+            "O que o zero disse para o oito? 'Que cinto bonito!' 😂\n\nBrincadeiras a parte, precisa de algo? 😊",
+            "Por que o bot foi ao medico? Porque estava com um *bug*! 🐛😂\n\nMas se seu bot tiver algum bug real, me conta que eu ajudo! 🔧",
+            "Qual e o animal mais antigo do mundo? A zebra, porque ainda e em preto e branco! 😂\n\nHaha, agora serio — o que voce precisa? 🌸",
+        ]
+        return random.choice(jokes)
+
+    def _handle_status(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle status check requests."""
+        now = datetime.now(timezone.utc)
+        return (
+            f"Status da Plataforma Flora\n\n"
+            f"🟢 *Plataforma*: Online\n"
+            f"🟢 *WhatsApp API*: Operacional\n"
+            f"🟢 *LLM Router*: Operacional\n"
+            f"🟢 *Banco de Dados*: Operacional\n\n"
+            f"Ultima atualizacao: {now.strftime('%d/%m/%s as %H:%M')} UTC\n\n"
+            "Tudo funcionando normalmente! ✅"
+        )
+
+    def _handle_unknown(self, message: str, context: Optional[ConversationContext] = None) -> str:
+        """Handle unknown intents with helpful fallback."""
+        # Try to match against intents.json patterns
+        matched_response = self._match_intent_response(message)
+        if matched_response:
+            return matched_response
+
+        return random.choice(QUICK_REPLIES["not_understood"])
+
+    def _match_intent_response(self, message: str) -> Optional[str]:
+        """Try to match message against intents.json patterns."""
+        if not hasattr(self, 'intents_data') or not self.intents_data.get("intents"):
+            return None
+
+        message_lower = message.lower().strip()
+
+        for intent in self.intents_data["intents"]:
+            patterns = intent.get("patterns", [])
+            responses = intent.get("responses", [])
+
+            if not responses:
+                continue
+
+            for pattern in patterns:
+                if pattern.lower() in message_lower:
+                    return random.choice(responses)
+
+        return None
+
+    def get_welcome_message(self, user_name: str = "", is_returning: bool = False) -> str:
+        """Get a welcome message for the user."""
+        if is_returning:
+            if user_name:
+                return f"Ola novamente, {user_name}! Bom te ver de volta 🌸 Em que posso ajudar?"
+            return "Ola novamente! Bom te ver de volta 🌸 Em que posso ajudar?"
+
+        if user_name:
+            return f"Ola, {user_name}! Sou a Flora, sua assistente virtual da Flora Platform 🌸 Como posso te ajudar?"
+        return "Ola! Sou a Flora, sua assistente virtual da Flora Platform 🌸 Como posso te ajudar?"
+
+    def get_help_content(self, topic: str = "general") -> str:
+        """Get help content for a specific topic."""
+        return HELP_CONTENT.get(topic, HELP_CONTENT.get("general", ""))
+
+    def get_personality(self) -> dict:
+        """Return Flora's personality definition."""
+        return PERSONALITY.copy()

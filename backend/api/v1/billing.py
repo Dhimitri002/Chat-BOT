@@ -12,7 +12,7 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 
 
 class AddPaymentMethodRequest(BaseModel):
-    type: str = Field(..., regex="^(credit_card|pix|boleto)$")
+    type: str = Field(..., pattern="^(credit_card|pix|boleto)$")
     token: str = Field(..., description="Token do método de pagamento")
 
 

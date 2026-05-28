@@ -47,78 +47,102 @@ class IntentType(str, Enum):
 
 INTENT_KEYWORDS: dict[IntentType, list[str]] = {
     IntentType.GREETING: [
-        "oi", "olá", "ola", "eae", "eai", "opa", "bom dia", "boa tarde",
-        "boa noite", "fala aí", "fala ai", "salve", "hello", "hey", "hi",
-        "bom dia", "boa noite", "e aí", "e ai",
+        "oi", "ola", "eae", "eai", "opa", "bom dia", "boa tarde",
+        "boa noite", "fala ai", "salve", "hello", "hey", "hi",
+        "e ai", "e ae", "oie", "oii", "olá",
     ],
     IntentType.FAREWELL: [
-        "tchau", "flw", "falow", "até mais", "ate mais", "até logo",
-        "ate logo", "vou sair", "bye", "até breve", "nos vemos", "falou",
+        "tchau", "flw", "falow", "ate mais", "ate logo", "vou sair",
+        "bye", "ate breve", "nos vemos", "falou", "valeu", "até",
+        "até mais", "até logo",
     ],
     IntentType.HELP: [
-        "ajuda", "help", "me ajuda", "me ajude", "socorro", "não entendi",
-        "nao entendi", "como funciona", "o que você faz", "o que voce faz",
-        "comandos", "menu", "opções", "opcoes", "o que fazer",
+        "ajuda", "help", "me ajuda", "me ajude", "socorro", "nao entendi",
+        "como funciona", "o que voce faz", "o que fazes", "comandos",
+        "menu", "opcoes", "duvida", "duvidas", "como fazer",
+        "como usar", "tutorial", "guia", "instrucoes", "manual",
+        "nao sei", "preciso de ajuda",
     ],
     IntentType.THANK_YOU: [
-        "obrigado", "obrigada", "valeu", "thanks", "thank you", "agradeço",
-        "agradeco", "mto obrigado", "muito obrigado", "show", "massa",
-        "top", "perfeito",
+        "obrigado", "obrigada", "valeu", "thanks", "thank you",
+        "agradeco", "mto obrigado", "muito obrigado", "show",
+        "show de bola", "massa", "top", "perfeito", "otimo",
+        "excelente", "maravilha", "amei", "adorei", "muito bom",
     ],
     IntentType.BOT_CONFIG: [
-        "configurar bot", "criar bot", "novo bot", "configuração",
-        "configuracao", "setup", "iniciar bot", "bot não funciona",
-        "bot parou", "meu bot", "configurar", "bot config",
+        "bot", "robot", "chatbot", "configurar bot", "criar bot",
+        "novo bot", "meu bot", "personalidade", "tom do bot",
+        "intencoes", "intencao", "respostas", "resposta",
+        "configuracao", "configurar", "criar", "ativar bot",
+        "desativar bot", "bot nao responde", "bot parado",
+        "definir", "personalidade do bot", "nome do bot",
+        "idioma do bot", "mensagem de boas vindas",
     ],
     IntentType.WHATSAPP_CONNECTION: [
-        "conectar whatsapp", "qr code", "qrcode", "escanear",
-        "whatsapp não conecta", "nao conecta", "conexão falhou",
-        "conexao falhou", "problema whatsapp", "whatsapp erro",
-        "desconectou", "caiu whatsapp", "whatsapp",
+        "whatsapp", "whats", "wa", "conectar", "conexao", "qr code",
+        "qrcode", "escanear", "scan", "celular", "numero",
+        "telefone", "desconectou", "caiu", "offline", "reconectar",
+        "parear", "pareado", "aparelho", "whatsapp web",
+        "multidevice", "multi-device",
     ],
     IntentType.PLANS: [
-        "planos", "preços", "precos", "preço", "preco", "quanto custa",
-        "assinatura", "plano gratuito", "plano pago", "upgrade",
-        "plano free", "plano pro", "plano enterprise", "valores",
+        "plano", "planos", "preco", "precos", "valor", "valores",
+        "quanto custa", "assinatura", "assinar", "upgrade",
+        "trocar plano", "mudar plano", "melhor plano",
+        "free", "starter", "growth", "pro", "business",
+        "enterprise", "custom", "gratis", "gratuito",
+        "pago", "premium", "mensalidade", "anual",
+        "desconto", "cupom", "promocao", "pix", "cartao",
+        "boleto", "pagamento", "pagar",
     ],
     IntentType.ONBOARDING: [
-        "começar", "comecar", "iniciar", "primeiro uso", "primeira vez",
-        "como começar", "como comecar", "tutorial", "guia", "passo a passo",
-        "novo usuário", "novo usuario",
+        "onboarding", "comecar", "comeco", "primeiro passo",
+        "como comecar", "iniciar", "primeira vez", "novato",
+        "novo usuario", "guia", "passo a passo", "tutorial",
+        "primeiros passos", "setup", "instalacao", "configuracao inicial",
     ],
     IntentType.TECH_SUPPORT: [
-        "erro", "bug", "não funciona", "nao funciona", "quebrou", "falha",
-        "travou", "lento", "fora do ar", "indisponível", "indisponivel",
-        "manutenção", "manutencao", "reportar",
+        "erro", "bug", "problema", "falha", "defeito", "nao funciona",
+        "quebrou", "travou", "lento", "internet", "conexao",
+        "servidor", "offline", "fora do ar", "indisponivel",
+        "timeout", "crash", "bugado", "com erro", "com problema",
+        "nao conecta", "nao carrega", "tela branca",
     ],
     IntentType.ABOUT_FLORA: [
-        "quem é você", "quem e voce", "seu nome", "como você se chama",
-        "como voce se chama", "o que é flora", "o que e flora", "flora",
-        "assistente", "robô", "robo",
+        "quem e voce", "quem e vc", "o que e flora", "sobre voce",
+        "sobre a flora", "sua historia", "seu nome", "seu proposito",
+        "para que voce serve", "o que voce e", "inteligencia artificial",
+        "ia", "ai", "voce e um bot", "voce e humana", "voce e real",
     ],
     IntentType.SUPPORT: [
-        "suporte", "atendimento", "falar com humano", "falar com pessoa",
-        "chat suporte", "email suporte", "contato", "telefone",
-        "whatsapp suporte",
+        "suporte", "atendimento", "falar com alguem", "humano",
+        "pessoa", "atendente", "sac", "reclamacao", "ouvidoria",
+        "email", "contato", "telefone", "whatsapp suporte",
     ],
     IntentType.COMPLAINT: [
-        "ruim", "péssimo", "pessimo", "horrível", "horrivel", "odeio",
-        "não gostei", "nao gostei", "insatisfeito", "frustrado",
-        "decepcionado", "lixo", "inútil", "inutil",
+        "ruim", "pessimo", "horrivel", "detesto", "odeio",
+        "insatisfeito", "insatisfeita", "frustrado", "frustrada",
+        "raiva", "bravo", "brava", "puto", "irritado", "irritada",
+        "nao gostei", "pessimo", "lixo", "merda", "inutil",
+        "decepcionado", "decepcionada", "enganado", "enganada",
     ],
     IntentType.COMPLIMENT: [
-        "muito bom", "excelente", "incrível", "incrivel", "maravilhoso",
-        "ótimo", "otimo", "fantástico", "fantastico", "amei", "adoro",
-        "sensacional", "top demais", "muito bem",
+        "otimo", "excelente", "incrivel", "fantastico", "sensacional",
+        "adoro", "amei", "perfeito", "maravilhoso", "maravilhosa",
+        "lindo", "linda", "bonito", "bonita", "legal", "bacana",
+        "genial", "brilhante", "espetacular", "muito bom",
+        "muito bem", "parabens", "trabalho bem feito",
     ],
     IntentType.JOKE: [
-        "piada", "engraçado", "engraçada", "rir", "humor",
-        "me faz rir", "conta uma piada", "tô triste", "to triste", "me anima",
+        "piada", "rir", "engracado", "humor", "brincadeira",
+        "conta uma piada", "me faz rir", "me conta algo engra",
+        "risada", "haha", "hehe", "kkkk", "joke",
     ],
     IntentType.STATUS: [
-        "status", "conectado", "online", "funcionando", "bot ativo",
-        "bot online", "verificar status", "tudo bem", "tudo certo",
-        "como está", "como esta",
+        "status", "funcionando", "online", "offline", "disponivel",
+        "indisponivel", "manutencao", "sistema", "plataforma",
+        "tudo bem", "tudo certo", "operacional", "estabilidade",
+        "saude", "health", "uptime", "downtime",
     ],
 }
 
@@ -127,159 +151,171 @@ class IntentClassifier:
     """
     Classifies user messages into intent categories.
 
-    Uses a combination of:
-    1. Keyword matching (primary)
-    2. Pattern matching from intents.json (fallback)
-    3. Confidence scoring
-
-    Usage:
-        classifier = IntentClassifier()
-        intent = classifier.classify("Oi, como vai?")
-        # Returns: IntentType.GREETING
+    Uses keyword matching with confidence scoring.
+    Can be extended with ML-based classification.
     """
 
-    def __init__(self, intents_file: Optional[str] = None):
-        self._intents_file = intents_file
-        self._intents_data: dict = {}
-        self._keyword_patterns: dict[IntentType, list[re.Pattern]] = {}
+    def __init__(self, intents_file: Optional[Path] = None):
+        """
+        Initialize the classifier.
 
-        self._compile_keywords()
+        Args:
+            intents_file: Optional path to intents.json for pattern matching
+        """
+        self.intents_file = intents_file or Path(__file__).parent / "intents.json"
+        self._intents_data: Optional[dict] = None
+        self._load_intents()
 
-        if intents_file:
-            self._load_intents(intents_file)
-
-    def _compile_keywords(self) -> None:
-        """Pre-compile keyword patterns for faster matching."""
-        for intent_type, keywords in INTENT_KEYWORDS.items():
-            patterns = []
-            for kw in keywords:
-                # Use word boundary matching for short keywords
-                if len(kw) <= 3:
-                    pattern = re.compile(r'\b' + re.escape(kw) + r'\b', re.IGNORECASE)
-                else:
-                    pattern = re.compile(re.escape(kw), re.IGNORECASE)
-                patterns.append(pattern)
-            self._keyword_patterns[intent_type] = patterns
-
-    def _load_intents(self, filepath: str) -> None:
-        """Load intents from JSON file for fallback matching."""
+    def _load_intents(self) -> None:
+        """Load intents from JSON file."""
         try:
-            path = Path(filepath)
-            if path.exists():
-                with open(path, "r", encoding="utf-8") as f:
+            if self.intents_file.exists():
+                with open(self.intents_file, "r", encoding="utf-8") as f:
                     self._intents_data = json.load(f)
-                logger.debug(f"Loaded intents from {filepath}")
             else:
-                logger.warning(f"Intents file not found: {filepath}")
+                self._intents_data = {"intents": []}
+                logger.warning("intents.json not found at %s", self.intents_file)
         except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Failed to load intents: {e}")
+            logger.error("Failed to load intents: %s", e)
+            self._intents_data = {"intents": []}
 
     def classify(self, message: str) -> IntentType:
         """
         Classify a message into an intent type.
 
         Args:
-            message: User's message text
+            message: User message text
 
         Returns:
-            IntentType enum value
+            The detected IntentType
         """
-        if not message or not message.strip():
-            return IntentType.UNKNOWN
-
-        message_lower = message.lower().strip()
-
-        # 1. Try keyword matching with confidence scoring
-        scores: dict[IntentType, float] = {}
-
-        for intent_type, patterns in self._keyword_patterns.items():
-            score = 0.0
-            for pattern in patterns:
-                match = pattern.search(message_lower)
-                if match:
-                    # Longer matches get higher scores
-                    match_len = match.end() - match.start()
-                    score += match_len / max(len(message_lower), 1)
-
-            if score > 0:
-                scores[intent_type] = score
-
-        if scores:
-            best_intent = max(scores, key=scores.get)
-            best_score = scores[best_intent]
-
-            # Require minimum confidence
-            if best_score > 0.01:
-                logger.debug(
-                    f"Classified as {best_intent.value} (score: {best_score:.3f})",
-                    extra={"message": message[:50]}
-                )
-                return best_intent
-
-        # 2. Fallback: match against intents.json patterns
-        json_intent = self._match_json_intents(message_lower)
-        if json_intent:
-            return json_intent
-
-        return IntentType.UNKNOWN
-
-    def _match_json_intents(self, message_lower: str) -> Optional[IntentType]:
-        """Match against intents.json patterns as fallback."""
-        if not self._intents_data:
-            return None
-
-        tag_to_intent = {
-            "saudacao": IntentType.GREETING,
-            "despedida": IntentType.FAREWELL,
-            "agradecimento": IntentType.THANK_YOU,
-            "ajuda": IntentType.HELP,
-            "bot_config": IntentType.BOT_CONFIG,
-            "whatsapp_conexao": IntentType.WHATSAPP_CONNECTION,
-            "planos": IntentType.PLANS,
-            "onboarding": IntentType.ONBOARDING,
-            "problema_tecnico": IntentType.TECH_SUPPORT,
-            "personalidade": IntentType.ABOUT_FLORA,
-            "suporte": IntentType.SUPPORT,
-            "elogio": IntentType.COMPLIMENT,
-            "reclamacao": IntentType.COMPLAINT,
-            "piada": IntentType.JOKE,
-            "status_conexao": IntentType.STATUS,
-        }
-
-        for intent in self._intents_data.get("intents", []):
-            tag = intent.get("tag", "")
-            for pattern in intent.get("patterns", []):
-                if pattern.lower() in message_lower:
-                    return tag_to_intent.get(tag)
-
-        return None
+        intent, _ = self.classify_with_confidence(message)
+        return intent
 
     def classify_with_confidence(self, message: str) -> tuple[IntentType, float]:
         """
         Classify a message and return confidence score.
 
+        Args:
+            message: User message text
+
         Returns:
-            (IntentType, confidence) tuple where confidence is 0.0-1.0
+            Tuple of (IntentType, confidence_score)
         """
         if not message or not message.strip():
             return IntentType.UNKNOWN, 0.0
 
-        message_lower = message.lower().strip()
+        message_lower = message.strip().lower()
+
+        # Score each intent type
         scores: dict[IntentType, float] = {}
 
-        for intent_type, patterns in self._keyword_patterns.items():
-            score = 0.0
-            for pattern in patterns:
-                match = pattern.search(message_lower)
-                if match:
-                    match_len = match.end() - match.start()
-                    score += match_len / max(len(message_lower), 1)
+        for intent_type, keywords in INTENT_KEYWORDS.items():
+            score = self._calculate_score(message_lower, keywords)
             if score > 0:
                 scores[intent_type] = score
 
-        if scores:
-            best_intent = max(scores, key=scores.get)
-            best_score = min(scores[best_intent] * 5, 1.0)  # Normalize to 0-1
-            return best_intent, best_score
+        # Also check intents.json patterns
+        json_score = self._check_json_intents(message_lower)
+        for intent_tag, score in json_score.items():
+            mapped = self._map_json_tag(intent_tag)
+            if mapped:
+                scores[mapped] = max(scores.get(mapped, 0), score)
 
-        return IntentType.UNKNOWN, 0.0
+        if not scores:
+            return IntentType.UNKNOWN, 0.0
+
+        # Get highest scoring intent
+        best_intent = max(scores, key=scores.get)  # type: ignore
+        best_score = scores[best_intent]
+
+        # Normalize confidence to 0-1 range
+        confidence = min(best_score / 3.0, 1.0)
+
+        return best_intent, confidence
+
+    def _calculate_score(self, message: str, keywords: list[str]) -> float:
+        """
+        Calculate match score for a set of keywords.
+
+        Exact phrase matches score higher than partial matches.
+        """
+        score = 0.0
+
+        for keyword in keywords:
+            keyword_lower = keyword.lower()
+
+            # Exact phrase match (highest score)
+            if keyword_lower in message:
+                # Longer matches are more specific — score higher
+                score += len(keyword_lower.split()) * 0.5
+
+                # Bonus for exact word boundary match
+                pattern = r'\b' + re.escape(keyword_lower) + r'\b'
+                if re.search(pattern, message):
+                    score += 0.3
+
+        return score
+
+    def _check_json_intents(self, message: str) -> dict[str, float]:
+        """Check message against intents.json patterns."""
+        scores: dict[str, float] = {}
+
+        if not self._intents_data:
+            return scores
+
+        for intent in self._intents_data.get("intents", []):
+            tag = intent.get("tag", "")
+            patterns = intent.get("patterns", [])
+
+            for pattern in patterns:
+                if pattern.lower() in message:
+                    scores[tag] = scores.get(tag, 0) + 1.0
+
+        return scores
+
+    @staticmethod
+    def _map_json_tag(tag: str) -> Optional[IntentType]:
+        """Map an intents.json tag to an IntentType enum."""
+        tag_map = {
+            "saudacao": IntentType.GREETING,
+            "despedida": IntentType.FAREWELL,
+            "agradecimento": IntentType.THANK_YOU,
+            "ajuda": IntentType.HELP,
+            "bot_config": IntentType.BOT_CONFIG,
+            "whatsapp": IntentType.WHATSAPP_CONNECTION,
+            "whatsapp_connect": IntentType.WHATSAPP_CONNECTION,
+            "whatsapp_status": IntentType.WHATSAPP_CONNECTION,
+            "planos": IntentType.PLANS,
+            "plan_info": IntentType.PLANS,
+            "plan_upgrade": IntentType.PLANS,
+            "onboarding": IntentType.ONBOARDING,
+            "suporte_tecnico": IntentType.TECH_SUPPORT,
+            "tech_support": IntentType.TECH_SUPPORT,
+            "sobre_flora": IntentType.ABOUT_FLORA,
+            "about_flora": IntentType.ABOUT_FLORA,
+            "suporte": IntentType.SUPPORT,
+            "reclamacao": IntentType.COMPLAINT,
+            "complaint": IntentType.COMPLAINT,
+            "elogio": IntentType.COMPLIMENT,
+            "compliment": IntentType.COMPLIMENT,
+            "piada": IntentType.JOKE,
+            "joke": IntentType.JOKE,
+            "status": IntentType.STATUS,
+            "license_info": IntentType.PLANS,
+            "license_validate": IntentType.PLANS,
+            "bot_create": IntentType.BOT_CONFIG,
+            "intent_create": IntentType.BOT_CONFIG,
+            "command_create": IntentType.BOT_CONFIG,
+        }
+        return tag_map.get(tag)
+
+    def get_all_intents(self) -> list[IntentType]:
+        """Return all available intent types."""
+        return list(IntentType)
+
+    def reload(self) -> None:
+        """Reload intents from JSON file."""
+        self._load_intents()
+        logger.info("IntentClassifier reloaded with %d intents from JSON",
+                     len(self._intents_data.get("intents", [])))

@@ -1,330 +1,394 @@
 # 🌸 FLORA PLATFORM — Segurança
 
-## Princípio Fundamental
+> Documentação completa de segurança: criptografia, autenticação, licenças e proteção.
 
-> **O app do cliente NUNCA deve conter a chave mastra do sistema.**
-> Toda validação crítica acontece no backend. O cliente é "burro" por design.
+---
 
-## Camada 1: Transporte
+## 🔐 Visão Geral
 
-```
-• HTTPS/TLS 1.3 em toda comunicação
-• Certificate pinning nos apps (Kivy)
-• HSTS headers no backend
-• Cipher suites fortes apenas
-• Desabilitar TLS 1.0, 1.1
-```
-
-## Camada 2: Autenticação
-
-### Senhas
-```python
-# Argon2id — vencedor do Password Hashing Competition
-from argon2 import PasswordHasher
-
-ph = PasswordHasher(
-    time_cost=3,        # iterações
-    memory_cost=65536,   # 64MB de RAM
-    parallelism=4,       # threads
-    hash_len=32,         # tamanho do hash
-    salt_len=16          # tamanho do salt
-)
-
-# Hash
-hash = ph.hash(password)
-
-# Verify
-ph.verify(hash, password)
-```
-
-### JWT (JSON Web Tokens)
-```python
-import jwt
-from datetime import datetime, timedelta
-
-# Access token — curto (15 min)
-access_token = jwt.encode({
-    "sub": user.id,
-    "role": user.role,
-    "exp": datetime.utcnow() + timedelta(minutes=15),
-    "iat": datetime.utcnow(),
-    "jti": str(uuid4()),  # unique token ID para revogação
-}, PRIVATE_KEY, algorithm="RS256")
-
-# Refresh token — mais longo (7 dias)
-refresh_token = jwt.encode({
-    "sub": user.id,
-    "exp": datetime.utcnow() + timedelta(days=7),
-    "type": "refresh",
-    "jti": str(uuid4()),
-}, PRIVATE_KEY, algorithm="RS256")
-```
-
-### 2FA (TOTP)
-```python
-import pyotp
-
-# Gerar secret
-secret = pyotp.random_base32()
-
-# Gerar QR Code para Google Authenticator
-uri = pyotp.totp.TOTP(secret).provisioning_uri(
-    name=user.email,
-    issuer_name="Flora Platform"
-)
-
-# Verificar código
-totp = pyotp.TOTP(secret)
-is_valid = totp.verify(user_provided_code, valid_window=1)
-```
-
-### Rate Limiting
-```python
-# Por IP: 100 req/min
-# Por usuário: 200 req/min
-# Login: 5 tentativas / 15 min → bloqueio 30 min
-# Validação de licença: 10 tentativas / hora
-
-from slowapi import Limiter
-
-limiter = Limiter(key_func=get_remote_address)
-
-@app.post("/auth/login")
-@limiter.limit("5/15minute")
-async def login(request: Request, credentials: LoginSchema):
-    ...
-```
-
-### Proteção Brute Force
-```python
-MAX_ATTEMPTS = 5
-LOCKOUT_DURATION = timedelta(minutes=30)
-
-async def check_login_attempts(user):
-    if user.locked_until and user.locked_until > datetime.utcnow():
-        raise HTTPException(423, "Conta bloqueada. Tente novamente em 30 min.")
-    
-    if user.login_attempts >= MAX_ATTEMPTS:
-        user.locked_until = datetime.utcnow() + LOCKOUT_DURATION
-        user.login_attempts = 0
-        raise HTTPException(423, "Muitas tentativas. Conta bloqueada.")
-```
-
-## Camada 3: Autorização (RBAC)
+A Flora Platform implementa segurança em múltiplas camadas:
 
 ```
-Roles:
-  superadmin  → Acesso total a tudo
-  admin       → Gerencia bots, clientes, licenças (não pode deletar superadmin)
-  reseller    → Gerencia seus próprios clientes, gera licenças
-  client      → Acesso apenas ao seu próprio bot e dados
-
-Permissões por role:
-  superadmin: [*:create, *:read, *:update, *:delete]
-  admin: [bots:*, clients:read, clients:update, licenses:*, analytics:read]
-  reseller: [clients:create, clients:read (own), licenses:create (own)]
-  client: [bot:read (own), bot:update (own), analytics:read (own)]
+┌─────────────────────────────────────────────────────────────┐
+│                    CAMADA DE REDE                            │
+│  HTTPS │ WAF │ DDoS Protection │ Rate Limiting             │
+├─────────────────────────────────────────────────────────────┤
+│                    CAMADA DE API                             │
+│  JWT │ CORS │ Input Validation │ CSRF Protection           │
+├─────────────────────────────────────────────────────────────┤
+│                    CAMADA DE APLICAÇÃO                       │
+│  Auth │ RBAC │ Audit Log │ Anti-Clone                      │
+├─────────────────────────────────────────────────────────────┤
+│                    CAMADA DE DADOS                           │
+│  Encryption │ Hashing │ Parameterized Queries │ Backups   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Camada 4: Criptografia de Dados
+---
 
-### AES-256-GCM para dados sensíveis
-```python
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import os
+## 🔑 Criptografia
 
-class EncryptionService:
-    def __init__(self):
-        # Chave de 256 bits — armazenada em variável de ambiente
-        self.key = bytes.fromhex(os.environ["ENCRYPTION_KEY"])
-        self.aesgcm = AESGCM(self.key)
-    
-    def encrypt(self, plaintext: str) -> str:
-        nonce = os.urandom(12)  # 96-bit nonce
-        ciphertext = self.aesgcm.encrypt(
-            nonce,
-            plaintext.encode(),
-            None  # additional authenticated data
-        )
-        # Retorna nonce + ciphertext em base64
-        return base64.b64encode(nonce + ciphertext).decode()
-    
-    def decrypt(self, encrypted: str) -> str:
-        data = base64.b64decode(encrypted)
-        nonce = data[:12]
-        ciphertext = data[12:]
-        plaintext = self.aesgcm.decrypt(nonce, ciphertext, None)
-        return plaintext.decode()
-```
+### Algoritmos Utilizados
 
-### Dados que DEVEM ser criptografados em repouso:
-- Chaves de API das LLMs
-- Secrets de webhooks
-- TOTP secrets dos usuários
-- Tokens de refresh (opcional, recomendado)
-- Dados de pagamento (tokens, não números de cartão)
+| Uso | Algoritmo | Detalhes |
+|---|---|---|
+| **Senhas** | bcrypt | Custo 12, salt automático |
+| **Assinatura de Licenças** | RSA-2048 | SHA-256, PKCS#1 v1.5 |
+| **Dados Sensíveis** | AES-256 | Modo GCM, IV aleatório |
+| **Tokens JWT** | HS256 | Chave simétrica (HMAC-SHA256) |
+| **Comunicação** | TLS 1.3 | HTTPS obrigatório em produção |
 
-### HMAC para integridade
-```python
-import hmac
-import hashlib
+### Chaves Criptográficas
 
-def generate_hmac(data: str, secret: str) -> str:
-    return hmac.new(
-        secret.encode(),
-        data.encode(),
-        hashlib.sha256
-    ).hexdigest()
-
-def verify_hmac(data: str, secret: str, expected_hmac: str) -> bool:
-    return hmac.compare_digest(generate_hmac(data, secret), expected_hmac)
-```
-
-## Camada 5: Licenças
-
-### Geração do Par de Chaves
-```python
-from cryptography.hazmat.primitives.asymmetric import rsa, ec
+```bash
+# Gerar par de chaves RSA (licenças)
+python -c "
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 
-# RSA-2048 (ou ECC P-256 para melhor performance)
-private_key = rsa.generate_private_key(
-    public_exponent=65537,
-    key_size=2048
-)
+private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
-public_key = private_key.public_key()
-
-# Serializar para armazenar
-private_pem = private_key.private_bytes(
+# Salvar chave privada
+pem_private = private_key.private_bytes(
     encoding=serialization.Encoding.PEM,
     format=serialization.PrivateFormat.PKCS8,
-    encryption_algorithm=serialization.BestAvailableEncryption(MASTER_PASSWORD)
+    encryption_algorithm=serialization.BestAvailableEncryption(b'senha-forte')
 )
+with open('keys/license_private.pem', 'wb') as f:
+    f.write(pem_private)
 
-public_pem = public_key.public_bytes(
+# Salvar chave pública
+public_key = private_key.public_key()
+pem_public = public_key.public_bytes(
     encoding=serialization.Encoding.PEM,
     format=serialization.PublicFormat.SubjectPublicKeyInfo
 )
+with open('keys/license_public.pem', 'wb') as f:
+    f.write(pem_public)
+
+print('Chaves geradas com sucesso!')
+"
 ```
 
-### Assinatura da Licença
-```python
-from cryptography.hazmat.primitives.asymmetric import padding
+### Gerenciamento de Chaves
 
-def sign_license(license_key: str, private_key) -> str:
-    signature = private_key.sign(
-        license_key.encode(),
-        padding.PSS(
-            mgf=padding.MGF1(hashes.SHA256()),
-            salt_length=padding.PSS.MAX_LENGTH
-        ),
-        hashes.SHA256()
-    )
-    return base64.b64encode(signature).decode()
+| Chave | Onde | Rotação |
+|---|---|---|
+| `SECRET_KEY` | `.env` | A cada 90 dias |
+| `JWT_SECRET` | `.env` | A cada 90 dias |
+| `ENCRYPTION_KEY` | `.env` | A cada 180 dias |
+| RSA Private Key | `keys/license_private.pem` | A cada 365 dias |
+| RSA Public Key | `keys/license_public.pem` | A cada 365 dias |
+
+---
+
+## 🔐 Autenticação
+
+### Fluxo JWT
+
+```
+┌────────┐                          ┌────────┐
+│ Cliente│                          │ Servidor│
+└───┬────┘                          └───┬────┘
+    │  POST /auth/login                 │
+    │  {email, password}                │
+    │ ─────────────────────────────────▶│
+    │                                   │
+    │                           ┌───────▼───────┐
+    │                           │ Verifica bcrypt│
+    │                           │ Gera JWT       │
+    │                           └───────┬───────┘
+    │                                   │
+    │  {access_token, refresh_token}    │
+    │ ◀─────────────────────────────────│
+    │                                   │
+    │  GET /api/v1/bots                 │
+    │  Authorization: Bearer {access}   │
+    │ ─────────────────────────────────▶│
+    │                                   │
+    │                           ┌───────▼───────┐
+    │                           │ Verifica JWT   │
+    │                           │ Extrai user_id │
+    │                           └───────┬───────┘
+    │                                   │
+    │  {bots: [...]}                    │
+    │ ◀─────────────────────────────────│
 ```
 
-### Fingerprint do Dispositivo
-```python
-import hashlib
-import platform
+### Access Token
 
-def get_device_fingerprint() -> str:
-    """Gera fingerprint único do dispositivo"""
-    components = [
-        platform.node(),           # hostname
-        platform.machine(),        # arquitetura
-        platform.processor(),      # processador
-        os.environ.get("COMPUTERNAME", ""),
-        # Adicionar mais identificadores conforme necessário
-    ]
-    raw = "|".join(components)
-    return hashlib.sha256(raw.encode()).hexdigest()
+| Atributo | Valor |
+|---|---|
+| **Algoritmo** | HS256 |
+| **Expiração** | 30 minutos (configurável) |
+| **Payload** | user_id, email, role, permissions |
+| **Header** | Authorization: Bearer {token} |
+
+### Refresh Token
+
+| Atributo | Valor |
+|---|---|
+| **Expiração** | 7 dias (configurável) |
+| **Armazenamento** | Banco de dados (hasheado) |
+| **Rotação** | Novo refresh token a cada uso |
+| **Revogação** | Possível via logout |
+
+### 2FA (Autenticação de Dois Fatores)
+
+```python
+# Fluxo 2FA
+# 1. Usuário habilita 2FA
+POST /auth/2fa/setup
+# Retorna: {secret, qr_code_uri}
+
+# 2. Usuário verifica com app (Google Authenticator, Authy)
+POST /auth/2fa/verify
+Body: {code: "123456"}
+# Retorna: {backup_codes: [...]}
+
+# 3. Login com 2FA
+POST /auth/login
+Body: {email, password, totp_code: "123456"}
 ```
 
-### Anti-Replay
-```python
-import time
-import redis
+### Políticas de Senha
 
-def check_anti_replay(token_jti: str, redis_client) -> bool:
-    """Verifica se o token já foi usado (replay attack)"""
-    key = f"token:{token_jti}"
-    if redis_client.exists(key):
-        return False  # Token já usado — replay!
-    
-    # Registra token com expiração
-    redis_client.setex(key, 900, "used")  # 15 min
+| Regra | Valor |
+|---|---|
+| **Tamanho mínimo** | 8 caracteres |
+| **Tamanho máximo** | 128 caracteres |
+| **Requer maiúscula** | Sim |
+| **Requer minúscula** | Sim |
+| **Requer número** | Sim |
+| **Requer especial** | Sim |
+| **Histórico** | Últimas 5 senhas não podem ser reutilizadas |
+| **Expiração** | 90 dias (configurável) |
+| **Bloqueio** | 5 tentativas falhas = 15 min bloqueio |
+
+---
+
+## 🛡️ Autorização (RBAC)
+
+### Roles
+
+| Role | Permissões |
+|---|---|
+| **admin** | Acesso total a tudo |
+| **manager** | Gerenciar bots, licenças, clientes |
+| **support** | Ver tickets, ajudar clientes |
+| **client** | Gerenciar próprio bot |
+| **viewer** | Somente leitura |
+
+### Permissões por Endpoint
+
+| Endpoint | Admin | Manager | Support | Client | Viewer |
+|---|---|---|---|---|---|
+| `/admin/*` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `/licenses/*` | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `/bots/*` | ✅ | ✅ | ❌ | ✅ (own) | ❌ |
+| `/support/*` | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `/analytics/*` | ✅ | ✅ | ❌ | ✅ (own) | ✅ |
+| `/users/*` | ✅ | ✅ | ❌ | ✅ (own) | ❌ |
+
+---
+
+## 📜 Sistema de Licenças
+
+### Geração de Licença
+
+```python
+# 1. Gerar par de chaves RSA (uma vez)
+private_key, public_key = generate_rsa_keypair(2048)
+
+# 2. Criar licença
+license_data = {
+    "user_id": "uuid-do-usuario",
+    "plan_id": "uuid-do-plano",
+    "expires_at": "2025-12-31T23:59:59Z",
+    "max_devices": 1,
+    "hardware_id": None  # preenchido no primeiro uso
+}
+
+# 3. Assinar digitalmente
+signature = rsa_sign(
+    data=json.dumps(license_data, sort_keys=True),
+    private_key=private_key,
+    hash_algorithm="SHA-256"
+)
+
+# 4. Gerar chave da licença
+license_key = base64_encode(license_data + "." + signature)
+```
+
+### Validação de Licença
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  VALIDAÇÃO DE LICENÇA                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. Decodificar licença (base64)                           │
+│  2. Extrair dados e assinatura                              │
+│  3. Verificar assinatura com chave pública RSA              │
+│     └─ Inválida? → REJECT                                  │
+│  4. Verificar expiração                                     │
+│     └─ Expirada? → REJECT                                  │
+│  5. Verificar se está revogada (DB lookup)                  │
+│     └─ Revogada? → REJECT                                  │
+│  6. Verificar hardware binding                              │
+│     └─ Dispositivo diferente? → REJECT                     │
+│  7. Verificar limites do plano                              │
+│     └─ Excedido? → REJECT                                  │
+│  8. ✅ LICENÇA VÁLIDA                                      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Status da Licença
+
+| Status | Descrição |
+|---|---|
+| **active** | Licença válida e em uso |
+| **expired** | Expirou a data de validade |
+| **revoked** | Revogada pelo admin |
+| **suspended** | Suspensa temporariamente |
+| **pending** | Aguardando ativação |
+
+---
+
+## 🚫 Anti-Clone
+
+O sistema anti-clone impede que uma licença seja usada em múltiplos dispositivos:
+
+```python
+# Fluxo Anti-Clone
+def validate_device(license_key, hardware_id):
+    license = get_license(license_key)
+
+    if license.hardware_id is None:
+        # Primeiro uso: vincular dispositivo
+        license.hardware_id = hardware_id
+        save(license)
+        return True
+
+    if license.hardware_id != hardware_id:
+        # Dispositivo diferente: bloquear
+        log_security_event("CLONE_ATTEMPT", license_key, hardware_id)
+        return False
+
     return True
 ```
 
-## Camada 6: Auditoria
+### Hardware ID
+
+O hardware ID é gerado a partir de:
+- CPU serial number
+- MAC address
+- Disk serial number
+- Machine name
+
+---
+
+## 🚦 Rate Limiting
+
+### Limites por Endpoint
+
+| Endpoint | Limite | Janela |
+|---|---|---|
+| `/auth/login` | 5 req | 1 minuto |
+| `/auth/register` | 3 req | 10 minutos |
+| `/api/v1/*` (auth) | 100 req | 1 minuto |
+| `/api/v1/*` (admin) | 200 req | 1 minuto |
+| `/flora/chat` | 30 req | 1 minuto |
+| `/whatsapp/*` | 50 req | 1 minuto |
+
+### Headers de Rate Limit
+
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 87
+X-RateLimit-Reset: 1719000000
+```
+
+---
+
+## 📋 Audit Log
+
+Todas as ações importantes são registradas:
 
 ```python
-async def audit_log(
-    db,
-    user_id: UUID,
-    action: str,
-    entity_type: str,
-    entity_id: UUID,
-    old_value: dict = None,
-    new_value: dict = None,
-    request: Request = None
-):
-    """Registra toda ação sensível"""
-    await db.execute(
-        insert(AuditLog).values(
-            user_id=user_id,
-            action=action,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            old_value=old_value,
-            new_value=new_value,
-            ip_address=request.client.host if request else None,
-            user_agent=request.headers.get("user-agent") if request else None,
-        )
-    )
+{
+    "id": "uuid",
+    "user_id": "uuid-do-usuario",
+    "action": "bot.create",
+    "resource": "bot",
+    "resource_id": "uuid-do-bot",
+    "details": {"name": "Bot de Vendas"},
+    "ip_address": "192.168.1.1",
+    "user_agent": "Mozilla/5.0...",
+    "timestamp": "2025-06-21T10:30:00Z"
+}
 ```
 
-### Ações que DEVEM ser auditadas:
-- Login (sucesso e falha)
-- Criação/revogação de licença
-- Ativação/desativação de bot
-- Alteração de plano
-- Alteração de configuração sensível
-- Exportação de dados
-- Tentativa de acesso negado
-- Validação de licença (falha)
-- Alteração de senha
-- Habilitação/desabilitação de 2FA
+### Eventos Auditados
 
-## Checklist de Segurança
+| Evento | Severidade |
+|---|---|
+| Login (sucesso/falha) | Info / Warning |
+| Criação de bot | Info |
+| Exclusão de bot | Warning |
+| Geração de licença | Info |
+| Revogação de licença | Critical |
+| Tentativa de clone | Critical |
+| Alteração de plano | Info |
+| Exportação de dados | Warning |
+| Alteração de senha | Info |
+| Habilitação de 2FA | Info |
 
+---
+
+## 🔒 Headers de Segurança
+
+```python
+# Headers aplicados em todas as respostas
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 1; mode=block
+Content-Security-Policy: default-src 'self'
+Referrer-Policy: strict-origin-when-cross-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=()
 ```
-✅ Senhas com Argon2id
-✅ JWT com RS256 (assimétrico)
-✅ Access token curto (15 min)
-✅ Refresh token rotativo
-✅ 2FA/TOTP para admins
-✅ Rate limiting em todos os endpoints
-✅ Criptografia AES-256-GCM para segredos
-✅ Assinatura digital RSA para licenças
-✅ Fingerprint de dispositivo
-✅ Anti-replay tokens
-✅ HTTPS obrigatório
-✅ CORS configurado
-✅ Input validation (Pydantic)
-✅ SQL injection prevention (SQLAlchemy ORM)
-✅ XSS prevention (sem HTML rendering)
-✅ CSRF tokens (onde aplicável)
-✅ Logs de auditoria completos
-✅ Bloqueio por brute force
-✅ Chaves nunca no código cliente
-✅ Feature flags server-side
-✅ Validação de licença online
-✅ Revogação remota
-✅ Backups criptografados
-✅ Variáveis de ambiente para segredos
-✅ Segregação de dados por tenant
-✅ Princípio de menor privilégio
-```
+
+---
+
+## 🛡️ Proteção contra Ataques Comuns
+
+| Ataque | Proteção |
+|---|---|
+| **SQL Injection** | SQLAlchemy ORM (parameterized queries) |
+| **XSS** | Pydantic validation + CSP headers |
+| **CSRF** | JWT (stateless) + SameSite cookies |
+| **Brute Force** | Rate limiting + account lockout |
+| **Session Hijacking** | JWT com expiração curta + refresh rotation |
+| **Man-in-the-Middle** | TLS 1.3 obrigatório |
+| **Replay Attack** | JWT jti claim + nonce |
+| **IDOR** | RBAC + resource ownership checks |
+| **Mass Assignment** | Pydantic schemas (explicit fields) |
+
+---
+
+## 🔗 Próximos Passos
+
+- [Instalação](15-instalacao.md) — Configurar o ambiente
+- [Deploy](deploy.md) — Segurança em produção
+- [API Endpoints](11-api-endpoints.md) — Endpoints e autenticação
+- [FAQ](faq.md) — Perguntas frequentes sobre segurança
+
+---
+
+<div align="center">
+
+🌸 [Índice](INDICE.md) | [Anterior: Flora AI](09-flora-ai.md) | [Próximo: API Endpoints](11-api-endpoints.md)
+
+</div>

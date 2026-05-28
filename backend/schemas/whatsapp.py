@@ -170,3 +170,80 @@ class WebhookResponse(BaseModel):
     """Response to a webhook event."""
     success: bool
     message: str = "ok"
+
+
+# ─── Incoming Messages (Webhook Payload) ───────────────────────────
+
+class IncomingMessageData(BaseModel):
+    """Incoming message data from webhook."""
+    from_number: str
+    to_number: str = ""
+    push_name: Optional[str] = None
+    text: Optional[str] = None
+    media_url: Optional[str] = None
+    media_type: Optional[str] = None
+    media_caption: Optional[str] = None
+    message_id: str = ""
+    timestamp: Optional[datetime] = None
+    is_group: bool = False
+    is_forwarded: bool = False
+    raw: dict = Field(default_factory=dict)
+
+
+# ─── Chat History ───────────────────────────────────────────────────
+
+class ChatMessage(BaseModel):
+    """A single chat message."""
+    message_id: str
+    direction: str  # "in" or "out"
+    sender_phone: str
+    recipient_phone: str = ""
+    message_type: str  # text, image, video, audio, document
+    content: str = ""
+    media_url: Optional[str] = None
+    media_caption: Optional[str] = None
+    is_read: bool = False
+    is_delivered: bool = False
+    whatsapp_status: str = "pending"
+    timestamp: datetime
+    reply_to: Optional[str] = None
+
+
+class ChatHistoryResponse(BaseModel):
+    """Chat history response."""
+    session_id: str
+    bot_id: str = ""
+    contact_phone: str = ""
+    messages: list[ChatMessage] = Field(default_factory=list)
+    total: int = 0
+    has_more: bool = False
+
+
+# ─── Webhook Incoming (from external connector) ─────────────────────
+
+class WebhookIncomingPayload(BaseModel):
+    """Full webhook payload from an external WhatsApp connector/bridge."""
+    event: str
+    session_id: Optional[str] = None
+    bot_id: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    data: dict = Field(default_factory=dict)
+
+
+# ─── Event Log ──────────────────────────────────────────────────────
+
+class EventLogEntry(BaseModel):
+    """A single event log entry."""
+    id: str
+    event_type: str
+    message: str = ""
+    details: dict = Field(default_factory=dict)
+    phone_number: str = ""
+    created_at: datetime
+
+
+class EventLogResponse(BaseModel):
+    """Event log response."""
+    session_id: str
+    events: list[EventLogEntry] = Field(default_factory=list)
+    total: int = 0

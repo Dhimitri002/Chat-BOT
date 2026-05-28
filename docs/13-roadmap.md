@@ -1,191 +1,342 @@
-# 🌸 FLORA PLATFORM — Roadmap por Fases
+# 🌸 FLORA PLATFORM — Roadmap
 
-## Fase 0: Fundação (Semanas 1-2)
-**Objeto:** Estrutura base do projeto
+> Roadmap de desenvolvimento: o que foi feito, o que está em progresso e o que vem por aí.
 
-- [ ] Criar estrutura de pastas completa
-- [ ] Configurar ambiente Python (.venv, requirements.txt)
-- [ ] Configurar .env.example com todas as variáveis
-- [ ] Setup do banco SQLite com SQLAlchemy + Alembic
-- [ ] Criar models principais (users, licenses, plans, bots)
-- [ ] Criar schemas Pydantic
-- [ ] Setup do FastAPI com router base
-- [ ] Endpoint de health check
-- [ ] Configurar Loguru
-- [ ] README.md completo
+---
 
-## Fase 1: Autenticação e Segurança (Semanas 3-4)
-**Objeto:** Sistema de auth completo
+## 📊 Visão Geral
 
-- [ ] Registro de usuários
-- [ ] Login com JWT (access + refresh)
-- [ ] Hash de senhas com Argon2id
-- [ ] 2FA/TOTP para admins
-- [ ] Rate limiting
-- [ ] Proteção brute force
-- [ ] RBAC (roles e permissões)
-- [ ] Criptografia AES-256-GCM
-- [ ] Geração de par de chaves RSA para licenças
-- [ ] Logs de auditoria
-- [ ] Middleware de segurança
+| Fase | Nome | Status | Progresso |
+|---|---|---|---|
+| **Fase 1** | Fundação | ✅ Concluída | 100% |
+| **Fase 2** | Inteligência | ✅ Concluída | 100% |
+| **Fase 3** | Interface | 🔄 Em progresso | ~45% |
+| **Fase 4** | Monetização | 📋 Planejado | ~15% |
+| **Fase 5** | Produção | 📋 Planejado | ~5% |
+| **Fase 6** | Expansão | 📋 Planejado | ~0% |
 
-## Fase 2: Sistema de Licenças (Semanas 5-6)
-**Objeto:** Geração e validação de licenças
+---
 
-- [ ] CRUD de planos
-- [ ] Geração de licenças com assinatura digital
-- [ ] Validação de licença (endpoint)
-- [ ] Fingerprint de dispositivo
-- [ ] Anti-replay
-- [ ] Revogação remota
-- [ ] Renovação
-- [ ] Expiração automática
-- [ ] Seed de planos padrão (Starter → Enterprise)
+## ✅ Fase 1 — Fundação (Concluída)
 
-## Fase 3: Backend de Bots (Semanas 7-8)
-**Objeto:** CRUD e configuração de bots
+> Backend core, banco de dados, autenticação e segurança básica.
 
-- [ ] CRUD de bots
-- [ ] CRUD de intents
-- [ ] CRUD de comandos
-- [ ] Motor de comandos (command engine)
-- [ ] Intent matcher
-- [ ] CRUD de templates
-- [ ] Aplicar template em bot
-- [ ] Versionamento de configuração
-- [ ] Backup/restore de bot
+### Backend Core
 
-## Fase 4: WhatsApp Connector (Semanas 9-10)
-**Objeto:** Conexão WhatsApp funcionando
+- [x] Estrutura do projeto FastAPI
+- [x] Configuração (pydantic-settings)
+- [x] Banco de dados (SQLite dev / PostgreSQL prod)
+- [x] SQLAlchemy async ORM
+- [x] Sistema de migrations (Alembic)
+- [x] Health check endpoint
+- [x] Error handling global
+- [x] CORS middleware
 
-- [ ] Integração WPPConnect
-- [ ] Geração de QR Code
-- [ ] Gerenciamento de sessões
-- [ ] Recebimento de mensagens
-- [ ] Envio de mensagens
-- [ ] Processamento de mensagem (intent → resposta)
-- [ ] Fallback para LLM
-- [ ] Status da conexão
-- [ ] Reconexão automática
-- [ ] Envio de mídia (básico)
+### Modelos de Dados
 
-## Fase 5: LLM Router (Semanas 11-12)
-**Objeto:** Roteamento inteligente de LLMs
+- [x] 18+ modelos SQLAlchemy
+- [x] Relacionamentos (FK, many-to-many)
+- [x] Timestamps automáticos (created_at, updated_at)
+- [x] UUID como chave primária
+- [x] Soft delete (is_active, deleted_at)
 
-- [ ] Implementar base do LLM Router
-- [ ] Provider: Groq
-- [ ] Provider: Gemini
-- [ ] Provider: OpenAI
-- [ ] Provider: Anthropic
-- [ ] Provider: Ollama (local)
-- [ ] Fallback chain
-- [ ] Rate limiting por plano
-- [ ] Controle de custos
-- [ ] Métricas de uso (tokens, custo, latência)
-- [ ] Registro de uso no banco
+### Autenticação
 
-## Fase 6: Flora AI (Semanas 13-14)
-**Objeto:** Assistente Flora funcionando
+- [x] Registro de usuários
+- [x] Login com JWT
+- [x] Refresh Token
+- [x] 2FA (TOTP)
+- [x] Perfil do usuário (CRUD)
+- [x] Roles (admin, client)
 
-- [ ] System prompt da Flora
-- [ ] Endpoint /chat/flora
-- [ ] Integração com LLM Router
-- [ ] Memória de conversa (sessão)
-- [ ] Sugestões rápidas (chips)
-- [ ] Streaming de resposta
-- [ ] Contexto do cliente no prompt
-- [ ] Limites e regras da Flora
+### Sistema de Licenças
 
-## Fase 7: App do Cliente - KivyMD (Semanas 15-18)
-**Objeto:** App do cliente funcional
+- [x] Geração de licenças com assinatura RSA
+- [x] Validação de assinatura digital
+- [x] Expiração e renovação
+- [x] Revogação de licenas
+- [x] Binding de dispositivo (anti-clone)
 
-- [ ] Setup KivyMD com tema dark premium
-- [ ] Splash screen
-- [ ] Onboarding (3 slides)
-- [ ] Tela de validação de licença
-- [ ] Dashboard do bot
-- [ ] Tela de conexão WhatsApp (QR Code)
-- [ ] Chat de teste
-- [ ] Chat com Flora
-- [ ] Tela do plano
-- [ ] Relatórios simples
-- [ ] Configurações do bot
-- [ ] Suporte
-- [ ] Conta
-- [ ] Notificações
-- [ ] Bottom navigation
-- [ ] Componentes reutilizáveis
-- [ ] API client
-- [ ] WebSocket client (tempo real)
+### Segurança
 
-## Fase 8: App Administrador - KivyMD (Semanas 19-22)
-**Objeto:** App admin funcional
+- [x] Criptografia AES/RSA
+- [x] Hash de senhas (bcrypt)
+- [x] Rate limiting
+- [x] Audit logging
+- [x] Anti-clone (hardware binding)
 
-- [ ] Setup KivyMD com tema dark premium
-- [ ] Login + 2FA
-- [ ] Dashboard com cards e gráficos
-- [ ] Lista de bots
-- [ ] Editor de bot (wizard 8 etapas)
-- [ ] Gerenciador de licenças
-- [ ] Gerenciador de clientes
-- [ ] Gerenciador de planos
-- [ ] Analytics com gráficos
-- [ ] Logs e auditoria
-- [ ] Backup/restore
-- [ ] Templates
-- [ ] Suporte (tickets)
-- [ ] Configurações
-- [ ] Sandbox de teste
-- [ ] Sidebar navigation
-- [ ] Componentes reutilizáveis
+### Planos
 
-## Fase 9: Analytics e Billing (Semanas 23-24)
-**Objeto:** Métricas e pagamentos
+- [x] 7 planos (Free → Enterprise)
+- [x] CRUD de planos
+- [x] Limites por plano
+- [x] Acesso a LLMs por plano
 
-- [ ] Dashboard de analytics completo
-- [ ] Métricas de mensagens
-- [ ] Métricas de LLM (custo, tokens, latência)
-- [ ] Relatórios por bot/cliente
-- [ ] Exportação Excel/PDF
-- [ ] Integração Stripe (checkout)
+---
+
+## ✅ Fase 2 — Inteligência (Concluída)
+
+> LLM Router, Flora AI, comandos e intenções.
+
+### LLM Router
+
+- [x] Arquitetura multi-provider
+- [x] Integração OpenAI (GPT-4o, GPT-4o-mini)
+- [x] Integração Anthropic (Claude 3.5 Sonnet, Haiku)
+- [x] Integração Google (Gemini 1.5 Flash, Pro)
+- [x] Integração Groq (Llama 3.1)
+- [x] Integração OpenRouter
+- [x] Fallback automático entre providers
+- [x] Seleção por complexidade da tarefa
+- [x] Otimização de custo por plano
+- [x] Tracking de uso (tokens, custo)
+- [x] Rate limiting por provider
+
+### Flora AI
+
+- [x] Definição de personalidade
+- [x] System prompt engineering
+- [x] Integração com LLM Router
+- [x] Gestão de sessões de chat
+- [x] Memória contextual
+- [x] Guia de onboarding do cliente
+- [x] Resolução de problemas
+- [x] Redução de churn
+
+### Comandos e Intenções
+
+- [x] Sistema de comandos personalizados
+- [x] Comandos por regex
+- [x] Comandos por keyword
+- [x] Sistema de intenções (intent matching)
+- [x] Training phrases por intenção
+- [x] Respostas dinâmicas
+- [x] CRUD via API
+
+### Templates de Bot
+
+- [x] BotTemplates model
+- [x] Templates por categoria
+- [x] Criação de bot a partir de template
+- [x] Templates padrão (atendimento, vendas, suporte)
+- [x] Seed de templates no banco
+
+---
+
+## 🔄 Fase 3 — Interface (Em Progresso)
+
+> Apps KivyMD, WhatsApp connector, analytics básico.
+
+### App Admin (KivyMD) — 40%
+
+- [x] Estrutura do projeto KivyMD
+- [x] Design system (dark premium theme)
+- [x] Tela de Login
+- [x] Tela de Dashboard
+- [x] Componentes base (cards, nav drawer)
+- [ ] Tela de Bots (CRUD) — Em progresso
+- [ ] Tela de Licenças — Em progresso
+- [ ] Tela de Analytics — Pendente
+- [ ] Tela de Configurações — Pendente
+- [ ] Notificações push — Pendente
+- [ ] Tema claro/escuro toggle — Pendente
+
+### App Cliente (KivyMD) — 40%
+
+- [x] Estrutura do projeto KivyMD
+- [x] Design system (dark premium theme)
+- [x] Tela de Login
+- [x] Tela Home
+- [x] Componentes base
+- [ ] Tela de Setup do Bot — Em progresso
+- [ ] Tela de Chat (teste) — Em progresso
+- [ ] Tela de Configurações — Pendente
+- [ ] Tela de Perfil — Pendente
+- [ ] Integração QR Code — Pendente
+
+### WhatsApp Connector — 50%
+
+- [x] Estrutura do connector
+- [x] Geração de QR Code
+- [x] Recebimento de mensagens
+- [x] Envio de mensagens
+- [ ] Sessões persistentes — Em progresso
+- [ ] Reconexão automática — Em progresso
+- [ ] Suporte a mídias (imagens, áudio) — Pendente
+- [ ] Suporte a grupos — Pendente
+- [ ] Status de conexão em tempo real — Pendente
+
+### Analytics Básico — 30%
+
+- [x] Modelo de dados para métricas
+- [x] Endpoint de dashboard
+- [x] Contagem de mensagens
+- [ ] Gráficos de uso — Em progresso
+- [ ] Relatórios por período — Pendente
+- [ ] Exportação (CSV, PDF) — Pendente
+- [ ] Analytics por bot — Pendente
+
+### Notificações — 60%
+
+- [x] Modelo de notificações
+- [x] CRUD via API
+- [x] Marcar como lida
+- [ ] Notificação em tempo real (WebSocket) — Em progresso
+- [ ] Notificações por email — Pendente
+- [ ] Push notifications — Pendente
+
+### Sistema de Suporte — 50%
+
+- [x] Modelo de tickets
+- [x] CRUD de tickets via API
+- [x] Status e prioridade
+- [ ] Interface de tickets no app — Em progresso
+- [ ] Notificações de novos tickets — Pendente
+- [ ] SLA e escalação — Pendente
+
+---
+
+## 📋 Fase 4 — Monetização (Planejado)
+
+> Billing, webhooks de pagamento, analytics avançado.
+
+### Sistema de Pagamentos
+
+- [ ] Integração Stripe
 - [ ] Integração MercadoPago
-- [ ] Webhook de pagamento
+- [ ] Gestão de assinaturas
 - [ ] Cobrança recorrente
-- [ ] Notificação de vencimento
-- [ ] Grace period
+- [ ] Histórico de pagamentos
+- [ ] Receipts e invoices
 
-## Fase 10: Polimento e Produção (Semanas 25-26)
-**Objeto:** Produto pronto para vender
+### Webhooks de Pagamento
 
-- [ ] Testes unitários (pytest)
-- [ ] Testes de integração
-- [ ] Correção de bugs
-- [ ] Otimização de performance
-- [ ] Build com PyInstaller
-- [ ] Docker setup
-- [ ] Deploy em VPS
-- [ ] PostgreSQL (migrar de SQLite)
-- [ ] Redis (cache + sessões)
-- [ ] Nginx reverse proxy
-- [ ] SSL/HTTPS
-- [ ] Monitoramento (logs, alertas)
-- [ ] Documentação final
-- [ ] Vídeo de demo
+- [ ] Webhook Stripe (succeso, falha, cancelamento)
+- [ ] Webhook MercadoPago
+- [ ] Processamento assíncrono
+- [ ] Retry logic
 
-## Fase 11: Expansão (Semanas 27+)
-**Objeto:** Crescimento contínuo
+### Analytics Avançado
 
-- [ ] Mais provedores LLM (DeepSeek, Cohere, Together)
-- [ ] Mais templates de bot
-- [ ] Sistema de revenda
-- [ ] White-label
-- [ ] API pública para clientes Enterprise
-- [ ] Webhooks outbound
-- [ ] Integração CRM
-- [ ] Campanhas de marketing
-- [ ] App mobile (Android via Buildozer)
-- [ ] Versão web (opcional)
-- [ ] Multi-idioma (EN, ES)
+- [ ] Funil de conversão
+- [ ] Taxa de retenção
+- [ ] LTV (Lifetime Value)
+- [ ] Churn prediction
+- [ ] A/B testing de prompts
+- [ ] Heatmap de uso
+
+### Sistema de Backup
+
+- [ ] Backup automático do banco
+- [ ] Restauração via API
+- [ ] Backup incremental
+- [ ] Retenção configurável
+
+---
+
+## 📋 Fase 5 — Produção (Planejado)
+
+> Deploy, monitoramento, performance, segurança avançada.
+
+### Deploy e Infraestrutura
+
+- [ ] CI/CD pipeline (GitHub Actions)
+- [ ] Blue-green deployment
+- [ ] Auto-scaling
+- [ ] Load balancing
+- [ ] CDN para assets
+
+### Monitoramento
+
+- [ ] Prometheus metrics
+- [ ] Grafana dashboards
+- [ ] Sentry error tracking
+- [ ] Uptime monitoring
+- [ ] Alertas por email/Slack
+
+### Performance
+
+- [ ] Cache Redis otimizado
+- [ ] Query optimization
+- [ ] Connection pooling
+- [ ] CDN para mídia
+- [ ] Lazy loading nos apps
+
+### Segurança Avançada
+
+- [ ] WAF (Web Application Firewall)
+- [ ] DDoS protection
+- [ ] Penetration testing
+- [ ] Security headers
+- [ ] Rate limiting distribuído
+
+---
+
+## 📋 Fase 6 — Expansão (Planejado)
+
+> Novos canais, features avançadas e mercado.
+
+### Novos Canais
+
+- [ ] Telegram bot
+- [ ] Instagram DM
+- [ ] Facebook Messenger
+- [ ] SMS
+- [ ] Email automation
+- [ ] Web Widget (chat embutido)
+
+### Features Avançadas
+
+- [ ] Multi-tenancy completo
+- [ ] White-label (subdomínios customizados)
+- [ ] API pública para integrações
 - [ ] Marketplace de templates
+- [ ] Builder visual de fluxos (drag-and-drop)
+- [ ] Analytics com ML (predições)
+- [ ] Sentiment analysis
+- [ ] Voice bot (speech-to-text + text-to-speech)
+
+### Mercado
+
+- [ ] Landing page
 - [ ] Programa de afiliados
-- [ ] Suporte humano integrado
+- [ ] Documentação pública da API
+- [ ] SDK para desenvolvedores
+- [ ] Comunidade Discord
+
+---
+
+## 📈 Métricas de Progresso
+
+| Componente | Progresso |
+|---|---|
+| Backend (FastAPI) | ████████████░░░░ 80% |
+| Banco de Dados | ██████████████░░ 90% |
+| Sistema de Licenças | █████████████░░░ 85% |
+| LLM Router | ██████████░░░░░░ 75% |
+| Flora AI | ██████████░░░░░░ 70% |
+| App Admin | █████░░░░░░░░░░░ 40% |
+| App Cliente | █████░░░░░░░░░░░ 40% |
+| WhatsApp Connector | ██████░░░░░░░░░░ 50% |
+| Analytics | ████░░░░░░░░░░░░ 30% |
+| Billing | █░░░░░░░░░░░░░░░ 10% |
+| Monitoramento | ██░░░░░░░░░░░░░░ 15% |
+
+**Progresso geral: ~45%**
+
+---
+
+## 🔗 Próximos Passos
+
+- [Visão Geral](01-visao-geral.md) — Entenda o projeto
+- [Instalação](15-instalacao.md) — Como instalar
+- [Segurança](10-seguranca.md) — Segurança da plataforma
+- [Deploy](deploy.md) — Guia de deploy em produção
+
+---
+
+<div align="center">
+
+🌸 [Índice](INDICE.md) | [Anterior: Estrutura de Pastas](12-estrutura-pastas.md) | [Próximo: Planos](14-planos.md)
+
+</div>

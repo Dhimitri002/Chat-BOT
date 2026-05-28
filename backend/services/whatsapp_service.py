@@ -34,6 +34,7 @@ from qrcode.image.pil import PilImage
 from pydantic import BaseModel, Field
 
 from backend.config import settings
+from backend.models.whatsapp_event import WhatsAppEvent, EventType
 
 logger = logging.getLogger(__name__)
 
@@ -1545,6 +1546,13 @@ class WhatsAppService:
             return await self.disconnect(sid)
         return False
 
+    @property
+    def status(self) -> Optional[ConnectionStatus]:
+        """Get the status of the first active session (for backward compat)."""
+        for conn in self._sessions.values():
+            return conn.status
+        return None
+
     def get_connection(self, session_id: str) -> Optional[WhatsAppSessionConnection]:
         """Get a connection by session ID."""
         return self._sessions.get(session_id)
@@ -1631,10 +1639,282 @@ class WhatsAppService:
 
         return conn.generate_qr()
 
+    async def log_event_to_db(
+        self,
+        session_id: str,
+        event_type: str,
+        message: str = "",
+        bot_id: str = "",
+        phone_number: str = "",
+        details: dict | None = None,
+    ):
+        """Log a WhatsApp event to the database for persistence."""
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from backend.database import async_session
+
+            async with async_session() as db:
+                event = WhatsAppEvent(
+                    session_id=session_id,
+                    bot_id=bot_id or "",
+                    event_type=event_type,
+                    message=message,
+                    details=details or {},
+                    phone_number=phone_number,
+                )
+                db.add(event)
+                await db.commit()
+        except Exception as e:
+            logger.error("Failed to log WhatsApp event to DB: %s", e)
+
+    async def process_incoming_webhook(self, payload: dict) -> dict:
+        """
+        Process an incoming webhook from an external WhatsApp connector/bridge.
+
+        Expected payload format:
+        {
+            "event": "message" | "qr" | "connected" | "disconnected" | "state_change",
+            "session_id": "...",
+            "bot_id": "...",
+            "data": { ... }
+        }
+
+        Returns a dict with status info.
+        """
+        event_type = payload.get("event", "")
+        session_id = payload.get("session_id", "")
+        bot_id = payload.get("bot_id", "")
+        data = payload.get("data", {})
+
+        logger.info("Webhook received: event=%s session=%s", event_type, session_id)
+
+        # Log the webhook event
+        await self.log_event_to_db(
+            session_id=session_id,
+            event_type=EventType.WEBHOOK_RECEIVED,
+            message=f"Webhook: {event_type}",
+            bot_id=bot_id,
+            details={"event_type": event_type, "data": data},
+        )
+
+        conn = self._sessions.get(session_id)
+
+        if event_type == "message" or event_type == "messages.upsert":
+            # Incoming message
+            from_number = data.get("from", data.get("from_number", ""))
+            text = data.get("text", data.get("body", data.get("content", "")))
+            push_name = data.get("pushName", data.get("push_name", ""))
+            message_id = data.get("id", data.get("message_id", str(uuid.uuid4())))
+            media_url = data.get("mediaUrl", data.get("media_url"))
+            media_type = data.get("mediaType", data.get("media_type"))
+            is_group = data.get("isGroup", data.get("is_group", False))
+
+            # Update stats
+            self._total_messages_received += 1
+
+            # Determine the "to" number
+            to_number = conn.status.phone_number if conn and conn.status else ""
+
+            # Create a WhatsAppMessage for processing
+            msg = WhatsAppMessage(
+                id=message_id,
+                from_number=from_number,
+                to_number=to_number,
+                text=text,
+                media_url=media_url,
+                media_type=media_type,
+                push_name=push_name,
+                is_group=is_group,
+                raw=data,
+            )
+
+            # Send to dispatcher if available
+            if self._notifier:
+                await self._notifier.notify_message(session_id, msg.model_dump())
+
+            # Log the received message event
+            await self.log_event_to_db(
+                session_id=session_id,
+                event_type=EventType.MESSAGE_RECEIVED,
+                message=f"Message from {from_number}",
+                bot_id=bot_id,
+                phone_number=from_number,
+                details={"message_id": message_id, "text": text[:200]},
+            )
+
+            # Store as outgoing for chat history
+            if conn:
+                chat_msg = ChatMessage(
+                    message_id=message_id,
+                    direction="in",
+                    sender_phone=from_number,
+                    recipient_phone=conn.status.phone_number or "",
+                    message_type=media_type or "text",
+                    content=text or "",
+                    media_url=media_url,
+                    timestamp=msg.timestamp,
+                    raw=data,
+                )
+                conn._chat_history.append(chat_msg)
+                # Trim history if too large
+                if len(conn._chat_history) > conn._max_history:
+                    conn._chat_history = conn._chat_history[-conn._max_history:]
+
+            return {"success": True, "message": "Message processed", "message_id": message_id}
+
+        elif event_type == "qr":
+            qr_string = data.get("qr", "")
+            expires_in = data.get("expiresIn", 60)
+            if conn:
+                conn.update_qr(qr_string, expires_in)
+            await self.log_event_to_db(
+                session_id=session_id,
+                event_type=EventType.QR_GENERATED,
+                message="QR code updated via webhook",
+                bot_id=bot_id,
+            )
+            if self._notifier:
+                await self._notifier.notify_qr(session_id, qr_string, expires_in)
+            return {"success": True, "message": "QR updated"}
+
+        elif event_type == "connected" or event_type == "connection.open":
+            phone = data.get("phoneNumber", data.get("phone_number", ""))
+            name = data.get("pushName", data.get("push_name", ""))
+            if conn:
+                conn._phone = phone
+                conn._push_name = name
+                conn._state = ConnectionState.CONNECTED
+                conn._connected_at = datetime.now(timezone.utc)
+                conn._retry_count = 0
+            await self.log_event_to_db(
+                session_id=session_id,
+                event_type=EventType.CONNECTION_ESTABLISHED,
+                message=f"Connected: {phone}",
+                bot_id=bot_id,
+                phone_number=phone,
+            )
+            if self._notifier:
+                await self._notifier.notify_state(
+                    session_id, ConnectionState.CONNECTED, phone, name
+                )
+            return {"success": True, "message": "Connected", "phone": phone}
+
+        elif event_type == "disconnected" or event_type == "connection.close":
+            reason = data.get("reason", data.get("message", "unknown"))
+            if conn:
+                conn._state = ConnectionState.DISCONNECTED
+                conn._qr_string = None
+            await self.log_event_to_db(
+                session_id=session_id,
+                event_type=EventType.CONNECTION_LOST,
+                message=f"Disconnected: {reason}",
+                bot_id=bot_id,
+            )
+            if self._notifier:
+                await self._notifier.notify_state(session_id, ConnectionState.DISCONNECTED)
+            return {"success": True, "message": f"Disconnected: {reason}"}
+
+        elif event_type == "state_change":
+            new_state = data.get("state", "disconnected")
+            state_map = {
+                "disconnected": ConnectionState.DISCONNECTED,
+                "connecting": ConnectionState.CONNECTING,
+                "qr_waiting": ConnectionState.QR_WAITING,
+                "qr_ready": ConnectionState.QR_WAITING,
+                "connected": ConnectionState.CONNECTED,
+                "reconnecting": ConnectionState.RECONNECTING,
+                "logged_out": ConnectionState.LOGGED_OUT,
+                "error": ConnectionState.ERROR,
+            }
+            mapped = state_map.get(new_state, ConnectionState.DISCONNECTED)
+            if conn:
+                conn._state = mapped
+            if self._notifier:
+                await self._notifier.notify_state(session_id, mapped)
+            return {"success": True, "message": f"State: {new_state}"}
+
+        else:
+            logger.warning("Unknown webhook event type: %s", event_type)
+            await self.log_event_to_db(
+                session_id=session_id,
+                event_type=EventType.WEBHOOK_ERROR,
+                message=f"Unknown event: {event_type}",
+                bot_id=bot_id,
+            )
+            return {"success": False, "message": f"Unknown event type: {event_type}"}
+
+    async def get_chat_history(
+        self,
+        session_id: str,
+        contact_phone: str = "",
+        limit: int = 50,
+        before_id: str = "",
+    ) -> list[ChatMessage]:
+        """
+        Get the chat history for a session.
+        If contact_phone is given, filters to that contact only.
+        """
+        conn = self._sessions.get(session_id)
+        if not conn:
+            return []
+
+        messages = conn._chat_history
+        if contact_phone:
+            normalized = contact_phone.replace("+", "").replace(" ", "")
+            messages = [
+                m for m in messages
+                if m.sender_phone.replace("+", "").replace(" ", "") == normalized
+                or m.recipient_phone.replace("+", "").replace(" ", "") == normalized
+            ]
+
+        if before_id:
+            idx = next((i for i, m in enumerate(messages) if m.message_id == before_id), -1)
+            if idx > 0:
+                messages = messages[:idx]
+
+        return messages[-limit:] if len(messages) > limit else messages
+
+    async def get_events_from_db(
+        self,
+        session_id: str,
+        limit: int = 100,
+        event_type: str = "",
+    ) -> list[dict]:
+        """Get WhatsApp events from the database."""
+        try:
+            from backend.database import async_session
+
+            async with async_session() as db:
+                from sqlalchemy import select, desc
+
+                stmt = select(WhatsAppEvent).where(WhatsAppEvent.session_id == session_id)
+
+                if event_type:
+                    stmt = stmt.where(WhatsAppEvent.event_type == event_type)
+
+                stmt = stmt.order_by(desc(WhatsAppEvent.created_at)).limit(limit)
+                result = await db.execute(stmt)
+                events = result.scalars().all()
+
+                return [
+                    {
+                        "id": e.id,
+                        "event_type": e.event_type,
+                        "message": e.message,
+                        "details": e.details,
+                        "phone_number": e.phone_number,
+                        "created_at": e.created_at.isoformat(),
+                    }
+                    for e in events
+                ]
+        except Exception as e:
+            logger.error("Failed to get events from DB: %s", e)
+            return []
+
     async def get_session_logs(
         self, session_id: str, limit: int = 100, event_type: Optional[str] = None
     ) -> list[dict]:
-        """Get logs for a specific session."""
+        """Get logs for a specific session (in-memory + DB)."""
         conn = self._sessions.get(session_id)
         if not conn:
             return []

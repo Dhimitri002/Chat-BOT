@@ -1,56 +1,167 @@
-# 🌸 FLORA PLATFORM — Visão Geral do Produto
+# 🌸 FLORA PLATFORM — Visão Geral
 
-## O Que É
+> Entenda o que é a Flora Platform, para quem ela foi criada e por quê.
 
-A **Flora Platform** é uma fábrica de chatbots para WhatsApp baseada em assinatura. Você cria, configura e gerencia bots profissionais. Seus clientes compram licenças, conectam o WhatsApp por QR Code e têm um bot funcionando — de simples (regras) a inteligente (LLMs). A **Flora AI** é a assistente embutida que guia o cliente dentro do app.
+---
 
-## Proposta de Valor
+## 🌺 O Que É
 
-| Para você (admin) | Para o cliente |
+A **Flora Platform** é uma plataforma SaaS (Software as a Service) completa para criação e gerenciamento de **chatbots para WhatsApp** com inteligência artificial integrada.
+
+Ela funciona como uma **fábrica de chatbots**: você configura, personaliza e coloca um bot para funcionar no WhatsApp de um cliente — tudo a partir de uma interface bonita e intuitiva.
+
+### Em Uma Frase
+
+> **"De bots simples baseados em regras a bots inteligentes com LLM — tudo em dois apps nativos com dark premium UI."**
+
+---
+
+## 🎯 Para Quem
+
+### 👨‍💼 Empreendedores Digitais
+- Querem vender chatbots como serviço
+- Precisam de uma plataforma white-label
+- Buscam escalar sem equipe técnica grande
+
+### 🏢 Agências de Marketing
+- Oferecem chatbot como serviço adicional
+- Gerenciam múltiplos clientes em um só lugar
+- Precisam de relatórios e analytics
+
+### 👨‍💻 Desenvolvedores
+- Querem uma base sólida para projetos de chatbot
+- Buscam arquitetura limpa e extensível
+- Precisam de multi-tenancy e gestão de licenças
+
+### 📞 Atendimento ao Cliente
+- Empresas que querem automatizar o WhatsApp
+- Precisam de bot + humano (handoff)
+- Querem reduzir tempo de resposta
+
+---
+
+## 💡 Por Que Flora?
+
+### O Problema
+
+Criar e gerenciar chatbots para WhatsApp é **caro, complexo e fragmentado**:
+
+- Ferramentas existentes são caras ou limitadas
+- Integrar IA (LLMs) do zero dá muito trabalho
+- Gerenciar múltiplos clientes e licenças é caótico
+- Apps de controle são feios ou inexistentes
+
+### A Solução
+
+A Flora Platform resolve tudo isso em **uma única plataforma**:
+
+| Problema | Solução Flora |
 |---|---|
-| Receita recorrente previsível | Bot profissional sem programar |
-| Controle total de todos os bots | Conexão WhatsApp em 30 segundos |
-| Escalar sem aumentar custo operacional | Suporte da Flora AI 24/7 |
-| Margem alta (custo LLM vs preço plano) | Recursos crescem com o plano |
-| White-label e revenda | Interface bonita e simples |
+| Chatbot caro e complexo | Fábrica de bots com templates prontos |
+| Integração com IA difícil | LLM Router com 5+ providers |
+| Gestão de clientes caótica | Sistema de licenças com assinatura digital |
+| Apps feios ou inexistentes | 2 apps KivyMD com dark premium UI |
+| Sem analytics | Dashboard completo de métricas |
+| Sem suporte integrado | Sistema de tickets + Flora AI |
 
-## Modelo de Negócio
+---
+
+## ✨ Diferenciais
+
+### 🌸 Flora AI
+Uma assistente virtual **embutida no app cliente** que:
+- Guia o usuário na configuração do bot
+- Responde dúvidas sobre a plataforma
+- Reduz churn e necessidade de suporte humano
+- Usa o mesmo LLM Router dos bots
+
+### 🔀 LLM Router
+Roteamento inteligente de modelos de linguagem:
+- **5+ providers**: OpenAI, Anthropic, Gemini, Groq, OpenRouter
+- **Fallback automático**: se um cai, usa o próximo
+- **Otimização de custo**: escolhe o modelo mais barato para cada tarefa
+- **Por plano**: cada plano tem acesso a modelos diferentes
+
+### 📱 Apps Nativos (KivyMD)
+Dois apps completos com design dark premium:
+- **App Admin**: gerencie bots, licenças, clientes, analytics
+- **App Cliente**: configure seu bot, conecte o WhatsApp, converse com a Flora
+
+### 🔐 Segurança de Ponta a Ponta
+- Licenças com **assinatura digital RSA**
+- Autenticação **JWT + Refresh Token + 2FA**
+- **Rate limiting** por endpoint
+- **Anti-clone** (binding de hardware)
+- **Criptografia** de dados sensíveis
+
+---
+
+## 📊 Números do Projeto
+
+| Métrica | Valor |
+|---|---|
+| **Modelos de dados** | 18+ |
+| **Endpoints REST** | 40+ |
+| **Planos de assinatura** | 7 (Free → Enterprise) |
+| **LLM Providers** | 5+ |
+| **Apps nativos** | 2 (Admin + Cliente) |
+| **Documentos** | 17+ |
+| **Linhas de código** | ~15.000+ |
+
+---
+
+## 🗺️ Como se Encaixa no Ecossistema
 
 ```
-Receita = Σ (clientes_ativos × preço_plano) - custo_LLM - infra
-
-Margem saudável porque:
-- Planos sem LLM = custo quase zero
-- Planos com LLM = markup de 3-10x sobre custo real
-- Enterprise = preço premium com custo marginal baixo
-- Revenda = você lucra, revendedor lucra
+                    ┌─────────────────┐
+                    │   WhatsApp Web  │
+                    │   (QR Code)     │
+                    └────────┬────────┘
+                             │
+    ┌────────────┐    ┌──────▼──────┐    ┌────────────┐
+    │  App Admin │    │   Flora     │    │  App       │
+    │  (KivyMD)  │◄──►│   Platform  │◄──►│  Cliente   │
+    │            │    │   (FastAPI) │    │  (KivyMD)  │
+    └────────────┘    └──────┬──────┘    └────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   Flora AI /    │
+                    │   LLM Router    │
+                    │   (5+ providers)│
+                    └─────────────────┘
 ```
 
-## Diferenciais Competitivos
+---
 
-1. **Dois apps nativos** (Kivy/KivyMD) — não é web app disfarçado
-2. **Flora AI integrada** — assistente que reduz churn e suporte
-3. **LLM Router inteligente** — custo otimizado por plano
-4. **Licença com assinatura digital** — anti-pirataria realasass
-5. **White-label nativo** — revendedores têm marca própria
-6. **Modo offline** — Ollama local para clientes enterprise
-7. **QR Code pairing** — zero configuração técnica pro cliente
+## 📋 Status Atual
 
-## Arquitetura de Alto Nível
+| Componente | Status | Progresso |
+|---|---|---|
+| Backend (FastAPI) | ✅ Funcional | ~80% |
+| Banco de Dados | ✅ Funcional | ~90% |
+| Sistema de Licenças | ✅ Funcional | ~85% |
+| LLM Router | ✅ Funcional | ~75% |
+| Flora AI | ✅ Funcional | ~70% |
+| App Admin (KivyMD) | 🔄 Em progresso | ~40% |
+| App Cliente (KivyMD) | 🔄 Em progresso | ~40% |
+| WhatsApp Connector | 🔄 Em progresso | ~50% |
+| Billing/Payments | 📋 Planejado | ~10% |
+| Analytics Avançado | 📋 Planejado | ~15% |
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      FLORA PLATFORM                              │
-│                                                                   │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐   │
-│  │  APP ADMIN   │    │  APP CLIENTE │    │   BACKEND API    │   │
-│  │  (KivyMD)    │    │  (KivyMD)    │    │   (FastAPI)      │   │
-│  │              │    │              │    │                  │   │
-│  │ • Cria bots  │    │ • Valida     │    │ • Valida licença │   │
-│  │ • Gera       │    │   licença    │    │ • Autentica      │   │
-│  │   licenças   │    │ • QR Code    │    │ • Roteia LLM     │   │
-│  │ • Gerencia   │    │ • Conversa   │    │ • Gerencia bots  │   │
-│  │   clientes   │    │ • Flora AI   │    │ • Logs/Auditoria │   │
-│  │ • Métricas   │    │ • Relatórios │    │ • Billing        │   │
-│  │ • Backup     │    │ • Planos     │    │ • Notificações   │   │
-│  └──────┬───────┘    └──────┬───────
+---
+
+## 🔗 Próximos Passos
+
+- [Arquitetura Técnica](02-arquitetura.md) — Entenda a arquitetura detalhada
+- [Banco de Dados](03-banco-de-dados.md) — Modelo de dados e entidades
+- [Fluxos](04-fluxos.md) — Fluxos completos do sistema
+- [Instalação](15-instalacao.md) — Como instalar e rodar
+- [Roadmap](13-roadmap.md) — O que vem por aí
+
+---
+
+<div align="center">
+
+🌸 [Índice](INDICE.md) | [Próximo: Arquitetura](02-arquitetura.md)
+
+</div>

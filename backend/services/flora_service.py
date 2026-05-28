@@ -1,56 +1,75 @@
 """
 Flora AI Service
 =================
-Serviço principal da Flora AI — integra o brain da Flora com o LLM Router
+Servico principal da Flora AI — integra o brain da Flora com o LLM Router
 para fornecer respostas inteligentes e contextuais.
 
 Responsabilidades:
-  - Gerenciar sessões de conversa (criar, carregar, persistir)
+  - Gerenciar sessoes de conversa (criar, carregar, persistir)
   - Integrar FloraBrain com LLMRouter para respostas via LLM
-  - Fornecer fallback inteligente quando LLM não está disponível
-  - Expor endpoints para chat, histórico, onboarding e ajuda
+  - Fornecer fallback inteligente quando LLM nao esta disponivel
+  - Expor endpoints para chat, historico, onboarding e ajuda
 """
 
-import json
+from __future__ import annotations
+
 import logging
-from typing import Any, Optional
+import uuid
 from datetime import datetime, timezone
+from typing import Any, Optional
 
-from backend.core.llm_router import LLMRouter
-from backend.config import settings
-
-from brain.flora import FloraBrain
+from brain.flora import FloraBrain, PLANS, ONBOARDING_STEPS, PERSONALITY
 from brain.prompts import (
-    get_system_prompt,
-    get_welcome_message,
-    get_help_content,
-    ONBOARDING_STEPS,
-    HELP_TOPICS,
+    FLORA_SYSTEM_PROMPT,
+    WELCOME_MESSAGE,
+    RETURNING_WELCOME,
+    HELP_CONTENT,
+    ONBOARDING_STEPS as ONBOARDING_PROMPTS,
+    PromptManager,
 )
-from brain.intents import IntentClassifier, Intent
-from brain.context import ConversationContext
+from brain.intents import IntentClassifier, IntentType
+from brain.context import ConversationContext, ContextManager
 
 logger = logging.getLogger(__name__)
+
+# Try to import LLMRouter — service works without it (rule-based fallback)
+try:
+    from backend.core.llm_router import LLMRouter, LLMError
+    from backend.config import settings
+    _LLM_AVAILABLE = True
+except ImportError:
+    _LLM_AVAILABLE = False
+    logger.warning("LLM Router not available — Flora will use rule-based responses only")
 
 
 class FloraService:
     """
-    Serviço da Flora AI.
+    Servico da Flora AI.
 
     Gerencia o ciclo completo de conversa:
-    1. Recebe mensagem do usuário
-    2. Carrega/cria contexto da sessão
-    3. Classifica intenção
+    1. Recebe mensagem do usuario
+    2. Carrega/cria contexto da sessao
+    3. Classifica intencao
     4. Gera resposta via LLM (com fallback)
     5. Persiste contexto atualizado
     """
 
     def __init__(self):
-        self.llm_router = LLMRouter(
-            provider=getattr(settings, "LLM_PROVIDER", "groq"),
-        )
+        self.brain = FloraBrain()
         self.classifier = IntentClassifier()
-        self._sessions: dict[str, ConversationContext] = {}
+        self.prompt_manager = PromptManager()
+        self.context_manager = ContextManager()
+
+        # Initialize LLM router if available
+        self.llm_router: Optional[Any] = None
+        if _LLM_AVAILABLE:
+            try:
+                self.llm_router = LLMRouter(
+                    provider=getattr(settings, "LLM_PROVIDER", "groq"),
+                )
+                logger.info("FloraService: LLM Router initialized")
+            except Exception as e:
+                logger.warning(f"FloraService: LLM Router init failed: {e}")
 
     def _get_or_create_context(
         self,
@@ -60,20 +79,24 @@ class FloraService:
         user_plan: str = "free",
     ) -> tuple[ConversationContext, bool]:
         """
-        Obtém ou cria um contexto de conversa.
+        Obtem ou cria um contexto de conversa.
 
         Returns:
-            (context, is_new) — o contexto e se é uma sessão nova
+            (context, is_new) — o contexto e se e uma sessao nova
         """
-        if session_id and session_id in self._sessions:
-            return self._sessions[session_id], False
+        if session_id:
+            existing = self.context_manager.get(session_id)
+            if existing:
+                return existing, False
 
-        ctx = ConversationContext(
-            system_prompt=get_system_prompt(user_name),
+        # Create new session
+        new_session_id = session_id or str(uuid.uuid4())
+        ctx = self.context_manager.get_or_create(
+            session_id=new_session_id,
+            user_id=user_id,
             user_name=user_name,
             user_plan=user_plan,
         )
-        self._sessions[ctx.session_id] = ctx
         return ctx, True
 
     async def chat(
@@ -85,63 +108,66 @@ class FloraService:
         user_plan: str = "free",
     ) -> dict[str, Any]:
         """
-        Processa uma mensagem do usuário e retorna a resposta da Flora.
+        Processa uma mensagem do usuario e retorna a resposta da Flora.
 
         Args:
-            message: Mensagem do usuário
-            session_id: ID da sessão (opcional, cria nova se não existir)
-            user_id: ID do usuário
-            user_name: Nome do usuário (para personalização)
-            user_plan: Plano do usuário (determina provedores LLM disponíveis)
+            message: Mensagem do usuario
+            session_id: ID da sessao (opcional, cria nova se nao existir)
+            user_id: ID do usuario
+            user_name: Nome do usuario (para personalizacao)
+            user_plan: Plano do usuario (determina provedores LLM disponiveis)
 
         Returns:
             dict com response, session_id, intent, tools_used, etc.
         """
         if not message or not message.strip():
             return {
-                "response": "🌸 Olá! Não recebi sua mensagem. Pode tentar novamente?",
+                "response": "Ola! Nao recebi sua mensagem. Pode tentar novamente? " + PERSONALITY["emoji"],
                 "session_id": session_id or "",
                 "intent": "unknown",
                 "confidence": 0.0,
                 "tools_used": [],
+                "is_new_session": False,
+                "message_count": 0,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
-        # 1. Obter ou criar contexto
+        # 1. Get or create context
         ctx, is_new = self._get_or_create_context(
             session_id, user_id, user_name, user_plan
         )
 
-        # 2. Classificar intenção
-        intent_result = self.classifier.classify_with_fallback(message)
-        ctx.update_state(last_intent=intent_result.intent.value)
+        # 2. Classify intent
+        intent_type, confidence = self.classifier.classify_with_confidence(message)
+        ctx.last_intent = intent_type.value
 
-        # 3. Adicionar mensagem do usuário
-        ctx.add_user_message(
-            message,
-            intent=intent_result.intent.value,
-            confidence=intent_result.confidence,
+        # 3. Add user message to context
+        ctx.add_message(
+            role="user",
+            content=message,
+            metadata={"intent": intent_type.value, "confidence": confidence},
         )
 
-        # 4. Gerar resposta
+        # 4. Generate response
         response_text = await self._generate_response(
-            ctx, message, intent_result, user_plan
+            ctx, message, intent_type, confidence, user_name, user_plan
         )
 
-        # 5. Adicionar resposta ao contexto
-        ctx.add_assistant_message(
-            response_text,
-            intent=intent_result.intent.value,
+        # 5. Add assistant response to context
+        ctx.add_message(
+            role="assistant",
+            content=response_text,
+            metadata={"intent": intent_type.value},
         )
 
         return {
             "response": response_text,
             "session_id": ctx.session_id,
-            "intent": intent_result.intent.value,
-            "confidence": intent_result.confidence,
+            "intent": intent_type.value,
+            "confidence": confidence,
             "tools_used": [],
             "is_new_session": is_new,
-            "message_count": ctx.total_user_messages,
+            "message_count": ctx.message_count,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -149,209 +175,235 @@ class FloraService:
         self,
         ctx: ConversationContext,
         message: str,
-        intent_result,
+        intent_type: IntentType,
+        confidence: float,
+        user_name: str,
         user_plan: str,
     ) -> str:
-        """Gera resposta usando LLM ou fallback."""
+        """Generates response using LLM or fallback."""
 
-        # Tentar via LLM primeiro
-        try:
-            llm_response = await self._call_llm(ctx, user_plan)
-            if llm_response and llm_response.strip():
-                return llm_response
-        except Exception as e:
-            logger.warning(f"LLM call failed, using fallback: {e}")
+        # Try LLM first if available and confidence is not high enough for rule-based
+        if self.llm_router:
+            try:
+                llm_response = await self._call_llm(ctx, user_plan)
+                if llm_response and llm_response.strip():
+                    return llm_response
+            except Exception as e:
+                logger.warning(f"LLM call failed, using fallback: {e}")
 
-        # Fallback: resposta baseada em intenção
-        return self._fallback_response(intent_result, message, ctx.state.user_name)
+        # Fallback: rule-based response via FloraBrain
+        return self._fallback_response(intent_type, confidence, message, ctx)
 
     async def _call_llm(self, ctx: ConversationContext, user_plan: str) -> str:
-        """Chama o LLM via LLMRouter."""
-        messages = ctx.get_messages_for_llm()
+        """Calls the LLM via LLMRouter."""
+        context_messages = ctx.get_recent_context(n=10)
 
-        if not messages:
+        if not context_messages:
             return ""
+
+        # Build system prompt with user context
+        system_prompt = FLORA_SYSTEM_PROMPT
+        if ctx.user_name:
+            system_prompt += f"\n\n## Usuario Atual\nNome: {ctx.user_name}"
+        if ctx.user_plan:
+            system_prompt += f"\nPlano: {ctx.user_plan}"
+
+        messages = [{"role": "system", "content": system_prompt}] + context_messages
 
         result = await self.llm_router.chat(
             messages=messages,
-            plan=user_plan,
             temperature=0.7,
             max_tokens=1024,
         )
 
-        content = result.get("content", "")
-        tokens = result.get("usage", {}).get("total_tokens", 0)
-        ctx.total_tokens += tokens
+        content = result.content if hasattr(result, 'content') else result.get("content", "")
+        tokens = result.total_tokens if hasattr(result, 'total_tokens') else result.get("usage", {}).get("total_tokens", 0)
+        ctx.metadata["total_tokens"] = ctx.metadata.get("total_tokens", 0) + tokens
 
         return content
 
     def _fallback_response(
         self,
-        intent_result,
+        intent_type: IntentType,
+        confidence: float,
         message: str,
-        user_name: str = "",
+        ctx: ConversationContext,
     ) -> str:
-        """Gera resposta fallback baseada na intenção."""
-        name = user_name or "amigo(a)"
+        """Generates rule-based fallback response via FloraBrain."""
+        user_name = ctx.user_name
 
-        # Greetings
-        if intent_result.intent == Intent.GREETINGS:
-            return get_welcome_message(name)
+        # If confidence is high enough, use FloraBrain's classify_and_respond
+        if confidence > 0.05:
+            return self.brain.classify_and_respond(message, ctx)
 
-        # Farewell
-        if intent_result.intent == Intent.FAREWELL:
-            return (
-                f"Foi um prazer conversar com você, {name}! 😊 "
-                f"Se precisar de qualquer coisa, é só me chamar. "
-                f"Tenha um ótimo dia! 🌸"
-            )
-
-        # Unknown
-        if intent_result.intent == Intent.UNKNOWN:
-            return (
-                f"🤔 Hmm, não entendi muito bem o que você quis dizer.\n\n"
-                f"Posso te ajudar com:\n"
-                f"- 🤖 **Criar bots** — Como criar e configurar\n"
-                f"- 📱 **WhatsApp** — Como conectar\n"
-                f"- 💳 **Planos** — Preços e upgrade\n"
-                f"- 🔧 **Suporte** — Resolver problemas\n\n"
-                f"O que você precisa, {name}?"
-            )
-
-        # Mapear intenção para tópico de ajuda
-        help_topic_map = {
-            Intent.ONBOARDING: "onboarding",
-            Intent.BOT_CONFIG: "create_bot",
-            Intent.WHATSAPP: "connect_whatsapp",
-            Intent.BILLING: "billing",
-            Intent.TECHNICAL: "troubleshooting",
-            Intent.HELP: "onboarding",
-            Intent.GENERAL: "onboarding",
-        }
-
-        topic = help_topic_map.get(intent_result.intent)
-        if topic:
-            help_content = get_help_content(topic)
-            return f"**{help_content['title']}**\n\n{help_content['content']}"
-
-        return (
-            f"🌸 Obrigada por sua mensagem, {name}! "
-            f"Estou aqui para te ajudar com a Flora Platform. "
-            f"Pode me perguntar sobre bots, WhatsApp, planos ou qualquer dúvida!"
-        )
+        # Very low confidence — use brain's fallback
+        return self.brain._match_intent_response(message)
 
     def get_history(self, session_id: str) -> list[dict[str, Any]]:
         """
-        Retorna o histórico de uma sessão.
+        Retorna o historico de uma sessao.
 
         Args:
-            session_id: ID da sessão
+            session_id: ID da sessao
 
         Returns:
             Lista de mensagens com role, content e timestamp
         """
-        if session_id not in self._sessions:
+        ctx = self.context_manager.get(session_id)
+        if not ctx:
             return []
 
-        ctx = self._sessions[session_id]
-        return ctx.get_recent_history()
+        return [msg.to_dict() for msg in ctx.history]
 
     def clear_history(self, session_id: str) -> bool:
         """
-        Limpa o histórico de uma sessão.
+        Limpa o historico de uma sessao (keeps session, clears messages).
 
         Args:
-            session_id: ID da sessão
+            session_id: ID da sessao
 
         Returns:
-            True se a sessão foi encontrada e limpa, False caso contrário
+            True se a sessao foi encontrada e limpa
         """
-        if session_id not in self._sessions:
+        ctx = self.context_manager.get(session_id)
+        if not ctx:
             return False
 
-        self._sessions[session_id].clear_history()
+        # Clear messages but keep session
+        ctx._history.clear()
+        ctx.message_count = 0
+        ctx.last_activity = datetime.now(timezone.utc).isoformat()
         return True
 
     def delete_session(self, session_id: str) -> bool:
-        """Remove completamente uma sessão."""
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            return True
-        return False
+        """Remove completamente uma sessao."""
+        return self.context_manager.delete(session_id)
 
     def get_onboarding_steps(self) -> list[dict[str, Any]]:
         """Retorna os passos do onboarding."""
         return ONBOARDING_STEPS
 
-    def get_help_topic(self, topic: str) -> dict[str, Any]:
+    def get_onboarding_step(self, step_number: int) -> Optional[dict[str, Any]]:
+        """Retorna um passo especifico do onboarding com conteudo completo."""
+        if 1 <= step_number <= 6:
+            step_data = ONBOARDING_PROMPTS.get(step_number, {})
+            return {
+                "step": step_number,
+                "title": step_data.get("title", ""),
+                "content": step_data.get("prompt", ""),
+                "emoji": ONBOARDING_STEPS[step_number - 1]["emoji"],
+                "next_hint": step_data.get("next_hint"),
+                "is_last_step": step_number == 6,
+            }
+        return None
+
+    def get_help_topic(self, topic: str) -> Optional[dict[str, Any]]:
         """
-        Retorna conteúdo de ajuda para um tópico específico.
+        Retorna conteudo de ajuda para um topico especifico.
 
         Args:
-            topic: Nome do tópico (onboarding, create_bot, connect_whatsapp, etc.)
+            topic: Nome do topico (general, bot_creation, whatsapp_connection, plans, onboarding)
 
         Returns:
             dict com title, content e related topics
         """
-        return get_help_content(topic)
-
-    def get_all_help_topics(self) -> dict[str, dict[str, Any]]:
-        """Retorna todos os tópicos de ajuda disponíveis."""
-        return HELP_TOPICS
-
-    def get_session_info(self, session_id: str) -> Optional[dict[str, Any]]:
-        """Retorna informações sobre uma sessão."""
-        if session_id not in self._sessions:
+        content = HELP_CONTENT.get(topic)
+        if not content:
             return None
 
-        ctx = self._sessions[session_id]
+        # Determine title from topic
+        topic_titles = {
+            "general": "Central de Ajuda",
+            "bot_creation": "Criacao de Bot",
+            "whatsapp_connection": "Conexao WhatsApp",
+            "plans": "Planos",
+            "onboarding": "Guia de Onboarding",
+        }
+
+        related_map = {
+            "general": ["bot_creation", "whatsapp_connection", "plans", "onboarding"],
+            "bot_creation": ["general", "whatsapp_connection"],
+            "whatsapp_connection": ["general", "bot_creation"],
+            "plans": ["general", "onboarding"],
+            "onboarding": ["general", "bot_creation", "whatsapp_connection"],
+        }
+
+        return {
+            "topic": topic,
+            "title": topic_titles.get(topic, topic),
+            "content": content,
+            "related": related_map.get(topic, []),
+        }
+
+    def get_all_help_topics(self) -> dict[str, dict[str, Any]]:
+        """Retorna todos os topicos de ajuda disponiveis."""
+        result = {}
+        for topic_key in HELP_CONTENT:
+            topic_data = self.get_help_topic(topic_key)
+            if topic_data:
+                result[topic_key] = topic_data
+        return result
+
+    def get_session_info(self, session_id: str) -> Optional[dict[str, Any]]:
+        """Retorna informacoes sobre uma sessao."""
+        ctx = self.context_manager.get(session_id)
+        if not ctx:
+            return None
+
         return {
             "session_id": ctx.session_id,
-            "message_count": ctx.total_user_messages,
-            "total_tokens": ctx.total_tokens,
-            "state": ctx.state.to_dict(),
+            "user_id": ctx.user_id,
+            "user_name": ctx.user_name,
+            "user_plan": ctx.user_plan,
+            "message_count": ctx.message_count,
+            "total_tokens": ctx.metadata.get("total_tokens", 0),
+            "is_onboarding": ctx.is_onboarding,
+            "onboarding_step": ctx.onboarding_step,
+            "last_intent": ctx.last_intent,
             "created_at": ctx.created_at,
-            "updated_at": ctx.updated_at,
+            "updated_at": ctx.last_activity,
+            "is_expired": ctx.is_expired,
         }
 
     def get_suggestions(self, session_id: Optional[str] = None) -> list[str]:
         """
-        Retorna sugestões contextuais para o usuário.
+        Retorna sugestoes contextuais para o usuario.
         Baseado no estado atual da conversa.
         """
-        if session_id and session_id in self._sessions:
-            ctx = self._sessions[session_id]
-            intent = ctx.state.last_intent
+        if session_id:
+            ctx = self.context_manager.get(session_id)
+            if ctx:
+                intent = ctx.last_intent
 
-            suggestions_map = {
-                "onboarding": [
-                    "Como criar meu primeiro bot?",
-                    "Como conectar o WhatsApp?",
-                    "Quais planos estão disponíveis?",
-                ],
-                "bot_config": [
-                    "Como definir a personalidade do bot?",
-                    "Como adicionar intenções?",
-                    "Como ativar meu bot?",
-                ],
-                "whatsapp": [
-                    "Como escanear o QR Code?",
-                    "Meu WhatsApp desconectou, o que fazer?",
-                    "Posso conectar mais de um número?",
-                ],
-                "billing": [
-                    "Qual o melhor plano para mim?",
-                    "Como fazer upgrade?",
-                    "Vocês aceitam Pix?",
-                ],
-                "technical": [
-                    "Bot não está respondendo",
-                    "Erro ao conectar WhatsApp",
-                    "Como ver logs do bot?",
-                ],
-            }
+                suggestions_map = {
+                    "onboarding": [
+                        "Como criar meu primeiro bot?",
+                        "Como conectar o WhatsApp?",
+                        "Quais planos estao disponiveis?",
+                    ],
+                    "bot_config": [
+                        "Como definir a personalidade do bot?",
+                        "Como adicionar intencoes?",
+                        "Como ativar meu bot?",
+                    ],
+                    "whatsapp_connection": [
+                        "Como escanear o QR Code?",
+                        "Meu WhatsApp desconectou, o que fazer?",
+                        "Posso conectar mais de um numero?",
+                    ],
+                    "plans": [
+                        "Qual o melhor plano para mim?",
+                        "Como fazer upgrade?",
+                        "Voces aceitam Pix?",
+                    ],
+                    "tech_support": [
+                        "Bot nao esta respondendo",
+                        "Erro ao conectar WhatsApp",
+                        "Como ver logs do bot?",
+                    ],
+                }
 
-            return suggestions_map.get(intent, self._default_suggestions())
+                return suggestions_map.get(intent, self._default_suggestions())
 
         return self._default_suggestions()
 
@@ -365,13 +417,13 @@ class FloraService:
         ]
 
 
-# ── Singleton ────────────────────────────────────────────────────────────────
+# ─── Singleton ─────────────────────────────────────────────────────────
 
 _flora_service: Optional[FloraService] = None
 
 
 def get_flora_service() -> FloraService:
-    """Retorna a instância singleton do FloraService."""
+    """Retorna a instancia singleton do FloraService."""
     global _flora_service
     if _flora_service is None:
         _flora_service = FloraService()

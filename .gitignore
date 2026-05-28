@@ -1,59 +1,72 @@
-# =============================================
-# Flora Platform — .gitignore
-# =============================================
+# ═══════════════════════════════════════════════════════════════
+# Flora Platform — Git Ignore
+# ═══════════════════════════════════════════════════════════════
 
-# Segredos — NUNCA commitar
-.env
-keys/
-*.pem
-*.key
-*.p12
-
-# Banco de dados
-*.db
-*.sqlite
-*.sqlite3
-
-# Python
+# ─── Python ────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.egg-info/
-.venv/
-venv/
-env/
 dist/
 build/
+*.egg
+.eggs/
+*.whl
 
-# Dados runtime
-data/
-backups/
-logs/
-*.log
+# ─── Virtual Environments ──────────────────────────────────
+venv/
+.venv/
+env/
+.env/
 
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# IDE
+# ─── IDE ───────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# ─── Environment Files ─────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.*.local
+
+# ─── Database ──────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── OS ────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Alembic (manter estrutura, ignorar versões locais)
-# backend/migrations/versions/*.py
-# !backend/migrations/versions/.gitkeep
+# ─── Logs ──────────────────────────────────────────────────
+*.log
+logs/
 
-# Temp files
+# ─── Testing ───────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+
+# ─── Node (WhatsApp connector) ─────────────────────────────
+node_modules/
+package-lock.json
+yarn.lock
+
+# ─── App Data ──────────────────────────────────────────────
+apps/admin/data/
+apps/client/data/
+data/
+
+# ─── Docker ─────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ─── Temporary ─────────────────────────────────────────────
 tmp/
 temp/
-.cache/
+*.tmp

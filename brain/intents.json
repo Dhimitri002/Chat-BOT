@@ -22,58 +22,93 @@
     },
     {
       "tag": "bot_config",
-      "patterns": ["configurar bot", "criar bot", "novo bot", "configuração", "configuracao", "setup", "iniciar bot", "bot não funciona", "bot parou", "meu bot", "configurar"],
-      "responses": ["Para configurar seu bot, siga estes passos:\n\n1. Acesse o painel admin\n2. Vá em 'Meus Bots'\n3. Clique em 'Novo Bot'\n4. Defina nome e personalidade\n5. Conecte o WhatsApp\n\nQuer que eu te guie passo a passo? 😊", "Vou te ajudar a configurar! Primeiro, me diz: você já tem um bot criado ou quer criar um novo? 🤖"]
+      "patterns": ["configurar bot", "criar bot", "novo bot", "meu bot", "personalidade do bot", "intenções", "intencoes", "respostas do bot", "ativar bot", "desativar bot", "bot não responde", "bot parado", "configuração do bot"],
+      "responses": ["Para configurar seu bot:\n\n1️⃣ Vá em Meus Bots > Criar Bot\n2️⃣ Defina nome e personalidade\n3️⃣ Adicione intenções\n4️⃣ Configure as respostas\n5️⃣ Ative o bot!\n\nQuer que eu detalhe algum passo? 🌸", "Vou te ajudar com a configuração! Me diz: o que você quer configurar no seu bot? 🤖"]
     },
     {
-      "tag": "whatsapp_conexao",
-      "patterns": ["conectar whatsapp", "qr code", "qrcode", "escanear", "whatsapp não conecta", "nao conecta", "conexão falhou", "conexao falhou", "problema whatsapp", "whatsapp erro", "desconectou", "caiu whatsapp"],
-      "responses": ["Vamos resolver a conexão! 🔧\n\n1. Verifique se o QR Code está visível\n2. Abra o WhatsApp no celular\n3. Vá em 'Aparelhos conectados'\n4. Toque em 'Conectar um aparelho'\n5. Escaneie o QR Code\n\nSe o QR expirou, posso gerar um novo. Quer tentar? 📱", "Problemas de conexão são comuns. Vamos verificar:\n\n✅ O QR Code está atualizado?\n✅ O celular tem internet?\n✅ O WhatsApp está atualizado?\n\nMe diz qual passo está dando erro que eu te ajudo! 🛠️"]
+      "tag": "whatsapp_connect",
+      "patterns": ["conectar whatsapp", "conectar whats", "qr code", "qrcode", "escanear", "conexão whatsapp", "parear", "pareado", "whatsapp web", "multidevice"],
+      "responses": ["Para conectar o WhatsApp:\n\n1️⃣ Vá em WhatsApp > Conexões\n2️⃣ Clique em Conectar Número\n3️⃣ Escaneie o QR Code com o celular\n\nO QR Code expira em 30 segundos! Se expirar, clique em Gerar Novo 🔄", "Vamos conectar! Vá em WhatsApp > Conexões e clique em Conectar Número. Depois é só escanear o QR Code 📱"]
     },
     {
-      "tag": "planos",
-      "patterns": ["planos", "preços", "precos", "preço", "preco", "quanto custa", "assinatura", "plano gratuito", "plano pago", "upgrade", "plano free", "plano pro", "plano enterprise", "valores"],
-      "responses": ["Temos 7 planos para atender você! 💎\n\n🆓 Free — R$0/mês (100 msgs)\n🌱 Starter — R$29/mês (1K msgs)\n🚀 Growth — R$79/mês (5K msgs)\n💼 Pro — R$149/mês (15K msgs)\n🏢 Business — R$299/mês (50K msgs)\n👑 Enterprise — R$599/mês (200K msgs)\n💎 Custom — Sob consulta (ilimitado)\n\nQuer detalhes de algum plano específico? 😊", "Nossos planos vão do gratuito ao enterprise! O Free já vem com 100 mensagens para testar. Qual plano te interessa? 🌸"]
+      "tag": "whatsapp_status",
+      "patterns": ["whatsapp desconectou", "caiu", "offline", "reconectar", "não conecta", "problema whatsapp", "erro whatsapp", "conexão caiu"],
+      "responses": ["Se o WhatsApp desconectou:\n\n1️⃣ Verifique sua internet\n2️⃣ O celular precisa estar conectado\n3️⃣ Vá em WhatsApp > Conexões > Reconectar\n4️⃣ Se não funcionar, desconecte e conecte novamente\n\nAinda com problemas? Me conta mais 🔧", "Vamos resolver! Primeiro, verifique se o celular está com internet. Depois tente reconectar pelo painel 🔧"]
+    },
+    {
+      "tag": "plan_info",
+      "patterns": ["planos", "preços", "quanto custa", "valores", "qual plano", "melhor plano", "plano free", "plano starter", "plano growth", "plano pro", "gratuito", "grátis"],
+      "responses": ["Nossos planos:\n\n🆓 Free — R$0/mês (100 msgs, 1 bot)\n🚀 Starter — R$29/mês (1K msgs, 2 bots)\n📈 Growth — R$79/mês (5K msgs, 5 bots, IA)\n⭐ Pro — R$149/mês (15K msgs, 10 bots, API)\n💼 Business — R$299/mês (50K msgs, 25 bots)\n🏢 Enterprise — R$599/mês (200K msgs, ilimitado)\n\nTodos com 7 dias grátis! 🎉 Qual te interessa?"]
+    },
+    {
+      "tag": "plan_upgrade",
+      "patterns": ["upgrade", "trocar plano", "mudar plano", "fazer upgrade", "assinar", "pagar", "pagamento", "pix", "cartão", "boleto"],
+      "responses": ["Para fazer upgrade:\n\n1️⃣ Vá em Configurações > Assinatura\n2️⃣ Escolha o plano desejado\n3️⃣ Confirme o pagamento\n\nAceitamos Pix, cartão de crédito e boleto 💳\n\nQual plano você quer? 🌸"]
     },
     {
       "tag": "onboarding",
-      "patterns": ["começar", "comecar", "iniciar", "primeiro uso", "primeira vez", "como começar", "como comecar", "tutorial", "guia", "passo a passo", "novo usuário", "novo usuario"],
-      "responses": ["Bem-vindo! Vou te guiar no onboarding! 🎉\n\nPasso 1: Criar sua conta\nPasso 2: Criar seu primeiro bot\nPasso 3: Conectar o WhatsApp\nPasso 4: Configurar respostas\nPasso 5: Testar e publicar!\n\nVamos começar pelo Passo 1? 😊", "Que bom ter você aqui! O onboarding é simples:\n\n1️⃣ Crie sua conta\n2️⃣ Crie um bot\n3️⃣ Conecte o WhatsApp\n4️⃣ Personalize\n5️⃣ Pronto!\n\nPor qual passo quer começar? 🚀"]
+      "patterns": ["onboarding", "começar", "como começar", "primeiro passo", "primeira vez", "novato", "novo usuário", "passo a passo", "guia", "primeiros passos", "tutorial"],
+      "responses": ["Vou te guiar na sua jornada! 🌸\n\n1️⃣ Criar Conta ✅\n2️⃣ Escolher Plano\n3️⃣ Criar Bot\n4️⃣ Definir Personalidade\n5️⃣ Conectar WhatsApp\n6️⃣ Ativar e Testar\n\nVamos começar? Me diz 'próximo' para avançar! 🚀"]
     },
     {
-      "tag": "problema_tecnico",
-      "patterns": ["erro", "bug", "não funciona", "nao funciona", "quebrou", "falha", "travou", "lento", "fora do ar", "indisponível", "indisponivel", "manutenção", "manutencao", "reportar"],
-      "responses": ["Poxa, sinto muito pelo problema! 😔\n\nMe descreva o que está acontecendo:\n• O que você estava fazendo?\n• Apareceu alguma mensagem de erro?\n• Quando começou?\n\nVou te ajudar a resolver! 🛠️", "Vamos resolver isso juntos! 💪\n\nPara me ajudar a identificar o problema:\n1. Tire um print da tela\n2. Me diga os passos que fez\n3. Informe se é no app ou WhatsApp\n\nQuanto mais detalhes, mais rápido resolvemos! 🔍"]
+      "tag": "tech_support",
+      "patterns": ["erro", "bug", "problema", "não funciona", "quebrou", "travou", "lento", "fora do ar", "indisponível", "não conecta", "tela branca"],
+      "responses": ["Vamos resolver isso! 🔧\n\nMe conta:\n- O que você estava fazendo?\n- Qual erro apareceu?\n- Quando começou?\n\nQuanto mais detalhes, melhor! 💪"]
     },
     {
-      "tag": "personalidade",
-      "patterns": ["quem é você", "quem e voce", "seu nome", "como você se chama", "como voce se chama", "o que é flora", "o que e flora", "flora", "assistente", "bot", "robô", "robo"],
-      "responses": ["Sou a Flora! 🌸 Sou a assistente virtual da Flora Platform. Estou aqui para te ajudar a configurar seu bot, conectar ao WhatsApp, explicar nossos planos e resolver qualquer dúvida! 😊", "Eu sou a Flora, sua assistente! 🌺 Meu trabalho é facilitar sua experiência com a plataforma. Posso te ajudar com configuração, conexão, planos e muito mais! O que precisa? 😄"]
+      "tag": "about_flora",
+      "patterns": ["quem é você", "quem e voce", "o que é flora", "sobre você", "seu nome", "você é um bot", "você é humana", "inteligência artificial"],
+      "responses": ["Sou a Flora 🌸, assistente virtual da Flora Platform!\n\nFui criada para te ajudar a criar e gerenciar chatbots para WhatsApp. Estou aqui 24/7! 😊", "Meu nome é Flora 🌸 Sou uma IA que ajuda você a configurar bots, conectar WhatsApp e tirar dúvidas sobre a plataforma!"]
     },
     {
       "tag": "suporte",
-      "patterns": ["suporte", "atendimento", "falar com humano", "falar com pessoa", "chat suporte", "email suporte", "contato", "telefone", "whatsapp suporte"],
-      "responses": ["Para suporte humano, você pode:\n\n📧 Email: suporte@flora.platform\n💬 Chat: Disponível no painel admin\n📱 WhatsApp: (11) 99999-0000\n🕐 Horário: Seg-Sex 9h-18h\n\nMas antes, posso tentar te ajudar aqui! O que precisa? 😊"]
-    },
-    {
-      "tag": "elogio",
-      "patterns": ["muito bom", "excelente", "incrível", "incrivel", "maravilhoso", "ótimo", "otimo", "fantástico", "fantastico", "amei", "adoro", "perfeito", "sensacional", "top demais", "muito bem"],
-      "responses": ["Ah, que gentil! Fico muito feliz! 🥰", "Obrigada! Isso me motiva a ser cada vez melhor! 💚", "Você é um amor! Obrigada pelo elogio! 🌸✨", "Que bom que gostou! Trabalhamos duro para isso! 😄"]
+      "patterns": ["suporte", "atendimento", "falar com alguém", "humano", "atendente", "sac", "reclamação", "email", "contato"],
+      "responses": ["Vou te direcionar para o suporte humano! 👥\n\nEnquanto isso, me conta o problema que já tento ajudar.\n\nVocê também pode enviar email para suporte@floraplatform.com 📧"]
     },
     {
       "tag": "reclamacao",
-      "patterns": ["ruim", "péssimo", "pessimo", "horrível", "horrivel", "odeio", "não gostei", "nao gostei", "insatisfeito", "frustrado", "decepcionado", "lixo", "inútil", "inutil"],
-      "responses": ["Poxa, sinto muito que sua experiência não foi boa 😔 Me conta o que aconteceu para que eu possa te ajudar a melhorar isso?", "Lamento ouvir isso. Seu feedback é muito importante para nós! Me explica o problema que vou fazer o possível para resolver 💪", "Desculpa por isso! Quer me contar mais detalhes? Quero entender o que aconteceu e te ajudar 🛠️"]
+      "patterns": ["ruim", "péssimo", "horrível", "detesto", "odeio", "insatisfeito", "frustrado", "raiva", "bravo", "não gostei", "decepcionado"],
+      "responses": ["Poxa, sinto muito que você está passando por isso 😔\n\nQuero resolver isso para você! Me conta mais detalhes do que aconteceu."]
+    },
+    {
+      "tag": "elogio",
+      "patterns": ["ótimo", "excelente", "incrível", "fantástico", "sensacional", "adoro", "amei", "maravilhoso", "lindo", "legal", "bacana", "genial", "parabéns"],
+      "responses": ["Ah, que gentil! Muito obrigada! 🌸😊", "Valeu! Fico feliz em saber! 💚", "Isso me faz muito bem! Obrigada! 😄🌸"]
     },
     {
       "tag": "piada",
-      "patterns": ["piada", "engraçado", "engraçada", "rir", "humor", "me faz rir", "conta uma piada", "tô triste", "to triste", "me anima"],
-      "responses": ["Por que o programador usa óculos? Porque não consegue C! 😂\n\nMas sério, como posso te ajudar? 😄", "O que o zero disse para o oito? \"Belo cinto!\" 😂\n\nBrincadeiras à parte, estou aqui se precisar de algo! 🌸", "Por que o WhatsApp foi ao psicólogo? Porque tinha muitas conexões! 😂😂\n\nE aí, melhorou? O que posso fazer por você? 😊"]
+      "patterns": ["piada", "rir", "engraçado", "humor", "brincadeira", "conta uma piada", "me faz rir"],
+      "responses": ["Por que o programador usa óculos? Porque ele não consegue C#! 😂\n\nMas falando sério, como posso te ajudar? 🌸", "O que o zero disse para o oito? 'Que cinto bonito!' 😂\n\nBrincadeiras à parte, precisa de algo? 😊"]
     },
     {
-      "tag": "status_conexao",
-      "patterns": ["status", "conectado", "online", "funcionando", "bot ativo", "bot online", "verificar status", "tudo bem", "tudo certo", "como está", "como esta"],
-      "responses": ["Deixa eu verificar o status para você! 🔍\n\nPara saber se seu bot está conectado:\n1. Acesse o painel admin\n2. Vá em 'Meus Bots'\n3. Veja o indicador de status\n\n🟢 Verde = Conectado\n🔴 Vermelho = Desconectado\n🟡 Amarelo = Conectando\n\nQuer que eu te ajude a verificar? 😊"]
+      "tag": "status",
+      "patterns": ["status", "funcionando", "online", "manutenção", "sistema", "plataforma", "tudo bem", "operacional"],
+      "responses": ["Status da Plataforma Flora:\n\n🟢 Plataforma: Online\n🟢 WhatsApp API: Operacional\n🟢 LLM Router: Operacional\n🟢 Banco de Dados: Operacional\n\nTudo funcionando normalmente! ✅"]
+    },
+    {
+      "tag": "license_info",
+      "patterns": ["licença", "licenca", "chave de licença", "ativar licença", "validar licença", "minha licença"],
+      "responses": ["Para gerenciar sua licença:\n\n1️⃣ Vá em Configurações > Licença\n2️⃣ Insira sua chave de licença\n3️⃣ Clique em Validar\n\nSua licença está vinculada à sua conta e pode ser ativada em até 3 máquinas."]
+    },
+    {
+      "tag": "license_validate",
+      "patterns": ["validar", "ativar", "verificar licença", "licença válida", "licença expirou"],
+      "responses": ["Para validar sua licença, vá em Configurações > Licença e insira sua chave.\n\nSe a licença expirou, você pode renovar ou fazer upgrade do seu plano! 🌸"]
+    },
+    {
+      "tag": "bot_create",
+      "patterns": ["criar bot", "novo bot", "primeiro bot", "como criar bot", "quero um bot", "preciso de um bot"],
+      "responses": ["Vamos criar seu primeiro bot! 🤖\n\n1️⃣ Vá em Meus Bots > Criar Novo Bot\n2️⃣ Defina um nome para o bot\n3️⃣ Configure a personalidade\n4️⃣ Adicione intenções iniciais\n5️⃣ Ative o bot!\n\nQuer que eu te guie em cada passo? 🌸"]
+    },
+    {
+      "tag": "intent_create",
+      "patterns": ["criar intenção", "nova intenção", "adicionar intenção", "intenção personalizada", "o que é intenção"],
+      "responses": ["Intenções são o que o bot entende! 🧠\n\nPara criar:\n1️⃣ Vá em Meu Bot > Intenções\n2️⃣ Clique em Nova Intenção\n3️⃣ Defina um nome (ex: 'saudacao')\n4️⃣ Adicione padrões (ex: 'oi', 'olá', 'bom dia')\n5️⃣ Configure a resposta\n\nQuer que eu te ajude a criar uma? 🌸"]
+    },
+    {
+      "tag": "command_create",
+      "patterns": ["criar comando", "novo comando", "comando personalizado", "comando /", "slash command"],
+      "responses": ["Comandos são ações que o bot executa! ⚡\n\nPara criar:\n1️⃣ Vá em Meu Bot > Comandos\n2️⃣ Clique em Novo Comando\n3️⃣ Defina o gatilho (ex: /ajuda)\n4️⃣ Configure a ação/resposta\n\nExemplo: /ajuda → mostra as opções disponíveis"]
     }
   ]
 }

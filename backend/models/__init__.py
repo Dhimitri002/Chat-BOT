@@ -22,6 +22,7 @@ from backend.models.notification import Notification
 from backend.models.flora_session import FloraSession
 from backend.models.payment import Payment, PaymentStatus
 from backend.models.conversation import Conversation
+from backend.models.whatsapp_event import WhatsAppEvent
 
 __all__ = [
     "Base",
@@ -39,4 +40,5 @@ __all__ = [
     "FloraSession",
     "Payment", "PaymentStatus",
     "Conversation",
+    "WhatsAppEvent",
 ]

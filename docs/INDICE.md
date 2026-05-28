@@ -1,61 +1,96 @@
 # 🌸 FLORA PLATFORM — Índice da Documentação
 
-## Documentos
+> Documentação completa da Flora Platform. Navegue pelos links abaixo.
 
-| # | Arquivo | Conteúdo |
+---
+
+## 📖 Visão Geral
+
+| # | Documento | Descrição |
 |---|---|---|
-| 01 | `01-visao-geral.md` | Visão geral do produto, proposta de valor, modelo de negócio, diferenciais |
-| 02 | `02-arquitetura.md` | Arquitetura completa, diagramas, stack técnica, LLMs suportadas |
-| 03 | `03-banco-de-dados.md` | Diagrama ER, todas as tabelas SQL com índices e constraints |
-| 04 | `04-fluxos.md` | Fluxos completos: licença, QR Code, Flora AI, WhatsApp, comandos, segurança |
-| 05 | `05-llm-router.md` | Arquitetura do LLM Router, política por plano, custos, rate limiting |
-| 06 | `06-telas-app-admin.md` | 15 telas do app administrador com wireframes e detalhamento |
-| 07 | `07-telas-app-cliente.md` | 13 telas do app do cliente com wireframes e detalhamento |
-| 08 | `08-design-visual.md` | Paleta de cores, tipografia, componentes UI, temas, animações |
-| 09 | `09-flora-ai.md` | Identidade da Flora, system prompt, capacidades, limites, exemplos |
-| 10 | `10-seguranca.md` | 6 camadas de segurança, criptografia, JWT, 2FA, auditoria, checklist |
-| 11 | `11-api-endpoints.md` | Mapa completo de endpoints com exemplos de request/response |
-| 12 | `12-estrutura-pastas.md` | Estrutura de pastas completa do projeto |
-| 13 | `13-roadmap.md` | Roadmap em 11 fases, semana a semana |
-| 14 | `14-planos.md` | 7 planos detalhados com comparação e estratégia de preços |
-| 15 | `15-ideias-expansao.md` | 1500 ideias de expansão (Produto, Mercado, UX/UI, IA/LLM) |
-| 16 | `16-ideias-expansao-2.md` | +1000 ideias (Segurança, Monitoramento, Integrações) |
+| 01 | [Visão Geral](01-visao-geral.md) | O que é, para quem, por quê foi criada |
+| 02 | [Arquitetura](02-arquitetura.md) | Arquitetura técnica detalhada (backend, frontend, IA) |
+| 03 | [Banco de Dados](03-banco-de-dados.md) | Modelo de dados, entidades e relacionamentos |
+| 04 | [Fluxos](04-fluxos.md) | Fluxos completos do sistema (licença, bot, chat) |
 
-## Resumo da Cobertura
+## 🧠 Inteligência Artificial
 
-- ✅ Visão geral do produto
-- ✅ Proposta de valor
-- ✅ Arquitetura completa
-- ✅ Fluxo dos dois apps
-- ✅ Fluxo da licença
-- ✅ Fluxo do QR Code
-- ✅ Fluxo do WhatsApp
-- ✅ Fluxo da Flora AI
-- ✅ Fluxo dos planos
-- ✅ Fluxo dos comandos personalizados
-- ✅ Fluxo da segurança
-- ✅ Fluxo das LLMs
-- ✅ Arquitetura de dados
-- ✅ 20+ tabelas SQL
-- ✅ 60+ endpoints de API
-- ✅ 15 telas do app admin
-- ✅ 13 telas do app cliente
-- ✅ Design visual completo
-- ✅ 7 temas visuais
-- ✅ Flora AI (identidade + prompt)
-- ✅ 6 camadas de segurança
-- ✅ LLM Router com 10 providers
-- ✅ 7 planos detalhados
-- ✅ Roadmap de 11 fases
-- ✅ 2500+ ideias de expansão
-- ✅ Estrutura de pastas completa
-- ✅ Exemplos de JSON
-- ✅ Exemplos de prompts
-- ✅ Exemplos de licenças
-- ✅ Exemplos de fluxos
-- ✅ Exemplos de telas
-- ✅ Exemplos de eventos
-- ✅ Exemplos de regras
-- ✅ Exemplos de painéis
-- ✅ Exemplo de backend
-- ✅ Exemplo de estrutura de pastas
+| # | Documento | Descrição |
+|---|---|---|
+| 05 | [LLM Router](05-llm-router.md) | Roteamento inteligente de modelos LLM |
+| 09 | [Flora AI](09-flora-ai.md) | A assistente virtual da plataforma |
+
+## 🎨 Interface
+
+| # | Documento | Descrição |
+|---|---|---|
+| 06 | [Telas App Admin](06-telas-app-admin.md) | Telas do aplicativo administrativo |
+| 07 | [Telas App Cliente](07-telas-app-cliente.md) | Telas do aplicativo do cliente |
+| 08 | [Design Visual](08-design-visual.md) | Design system e identidade visual |
+
+## 🔒 Segurança e API
+
+| # | Documento | Descrição |
+|---|---|---|
+| 10 | [Segurança](10-seguranca.md) | Segurança, criptografia e proteção |
+| 11 | [API Endpoints](11-api-endpoints.md) | Referência completa dos endpoints REST |
+
+## 🏗️ Estrutura e Rodmap
+
+| # | Documento | Descrição |
+|---|---|---|
+| 12 | [Estrutura de Pastas](12-estrutura-pastas.md) | Organização do código-fonte |
+| 13 | [Roadmap](13-roadmap.md) | Roadmap de desenvolvimento |
+| 14 | [Planos](14-planos.md) | Planos e preços (Free → Enterprise) |
+
+## 🚀 Operação
+
+| # | Documento | Descrição |
+|---|---|---|
+| 15 | [Instalação](15-instalacao.md) | Guia de instalação completo |
+| - | [Deploy](deploy.md) | Guia de deploy em produção |
+| - | [Contributing](contributing.md) | Guia de contribuição |
+| - | [FAQ](faq.md) | Perguntas frequentes |
+| - | [Changelog](changelog.md) | Histórico de versões |
+
+## 💡 Expansão
+
+| # | Documento | Descrição |
+|---|---|---|
+| 15 | [Ideias de Expansão](15-ideias-expansao.md) | Ideias de funcionalidades futuras (Parte 1) |
+| 16 | [Ideias de Expansão 2](16-ideias-expansao-2.md) | Ideias de funcionalidades futuras (Parte 2) |
+
+---
+
+## 🧭 Navegação Rápida
+
+### Para Novos Contribuidores
+1. Comece pela [Visão Geral](01-visao-geral.md)
+2. Entenda a [Arquitetura](02-arquitetura.md)
+3. Siga o [Guia de Instalação](15-instalacao.md)
+4. Leia o [Guia de Contribuição](contributing.md)
+
+### Para Desenvolvedores
+1. [API Endpoints](11-api-endpoints.md) — Referência da API
+2. [Estrutura de Pastas](12-estrutura-pastas.md) — Organização do código
+3. [Fluxos](04-fluxos.md) — Entenda os fluxos do sistema
+4. [Banco de Dados](03-banco-de-dados.md) — Modelo de dados
+
+### Para DevOps
+1. [Deploy](deploy.md) — Guia de deploy em produção
+2. [Segurança](10-seguranca.md) — Configurações de segurança
+3. [Instalação](15-instalacao.md) — Instalação completa
+
+### Para Produto
+1. [Roadmap](13-roadmap.md) — Status do desenvolvimento
+2. [Planos](14-planos.md) — Planos e preços
+3. [Flora AI](09-flora-ai.md) — Funcionalidades de IA
+4. [Ideias de Expansão](15-ideias-expansao.md) — Futuro da plataforma
+
+---
+
+<div align="center">
+
+🌸 [Voltar ao README](../README.md)
+
+</div>

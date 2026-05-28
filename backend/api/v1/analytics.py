@@ -249,7 +249,7 @@ async def get_llm_usage_stats(
 
 @router.get("/export")
 async def export_analytics(
-    format: str = Query("json", regex="^(json|csv)$"),
+    format: str = Query("json", pattern="^(json|csv)$"),
     days: int = Query(30, ge=1, le=365),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

@@ -14,3 +14,4 @@ from backend.schemas.subscription import *
 from backend.schemas.system import *
 from backend.schemas.user import *
 from backend.schemas.whatsapp import *
+from backend.schemas.flora import *
