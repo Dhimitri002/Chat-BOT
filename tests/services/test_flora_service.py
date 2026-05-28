@@ -47,12 +47,14 @@ async def test_flora_help_topic(flora_service):
 async def test_flora_session_context(flora_service):
     """Deve manter contexto da sessão."""
     context = await flora_service.get_session_context(session_id="session-123")
-    # Não deve lançar exceção
+    assert context is not None or context == {}
 
 
 @pytest.mark.asyncio
 async def test_flora_clear_session(flora_service, mock_db):
     """Deve limpar sessão."""
     mock_db.commit = AsyncMock()
+    mock_db.execute = AsyncMock()
     result = await flora_service.clear_session(session_id="session-123")
-    # Não deve lançar exceção
+    mock_db.execute.assert_awaited()
+    mock_db.commit.assert_awaited()

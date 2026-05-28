@@ -194,7 +194,7 @@ class PlansScreen(MDScreen):
             elevation=2,
             md_bg_color=get_color_from_hex(ThemeColors.CARD),
             size_hint_y=None,
-        }
+        )
         table_card.bind(minimum_height=table_card.setter("height"))
 
         comparison_data = [

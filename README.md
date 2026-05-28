@@ -11,7 +11,7 @@
 <div align="center">
 
 [![Versão](https://img.shields.io/badge/versão-1.0.0-red)](https://github.com/TiltzOff/flora-platform)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)](https://fastapi.tiangolo.com)
 [![KivyMD](https://img.shields.io/badge/KivyMD-1.2.0-009688)](https://kivymd.readthedocs.io)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](LICENSE)
@@ -110,7 +110,7 @@ A **Flora Platform** é uma fábrica de chatbots para WhatsApp baseada em assina
 
 | Camada | Tecnologia |
 |---|---|
-| **Backend** | Python 3.11+, FastAPI, SQLAlchemy async |
+| **Backend** | Python 3.13, FastAPI, SQLAlchemy async |
 | **Banco de Dados** | SQLite (dev) / PostgreSQL (prod) |
 | **Cache** | Redis |
 | **Frontend** | KivyMD 1.2.0 (2 apps nativos) |
@@ -127,7 +127,7 @@ A **Flora Platform** é uma fábrica de chatbots para WhatsApp baseada em assina
 
 ### Pré-requisitos
 
-- Python 3.11+
+- Python 3.13
 - pip ou poetry
 - Git
 - (Opcional) Docker e Docker Compose
@@ -320,11 +320,43 @@ Contribuições são bem-vindas! Veja o [guia de contribuição](docs/contributi
 |---|---|---|
 | Fase 1 | ✅ Concluída | Backend core, models, auth, licenças |
 | Fase 2 | ✅ Concluída | LLM Router, Flora AI, segurança |
-| Fase 3 | 🔄 Em progresso | Apps KivyMD, WhatsApp connector |
-| Fase 4 | 📋 Planejado | Billing, webhooks, analytics avançado |
-| Fase 5 | 📋 Planejado | Deploy produção, monitoramento |
+| Fase 3 | ✅ Concluída | Apps KivyMD (2 apps), testes, monitoring module |
+| Fase 4 | 🔄 Em progresso | Consolidação, middleware, WhatsApp connector, Flora AI integration |
+| Fase 5 | 📋 Planejado | Deploy produção, billing live, analytics avançado |
+
+### 📊 Estatísticas do Projeto (2026-05-28)
+
+| Métrica | Valor |
+|---|---|
+| Arquivos Python | 247 |
+| Linhas de Código Python | ~51,000 |
+| Modelos de Dados | 21 |
+| Endpoints API | 16 routers |
+| Serviços Backend | 11 |
+| Telas App Admin | 9 (+ 11 na nova versão) |
+| Telas App Cliente | 14 (+ 17 na nova versão) |
+| Módulos Brain/Flora AI | 7 (2,467 linhas) |
+| Arquivos de Teste | 14 |
+| Módulos de Segurança | 6 |
 
 Veja o [roadmap completo](docs/13-roadmap.md) para detalhes.
+
+---
+
+## 🔄 Continuidade do Projeto
+
+Este projeto utiliza um sistema de checkpoints para manter continuidade entre sessões de desenvolvimento.
+
+### Arquivos de Estado (ler primeiro em cada sessão):
+
+| Arquivo | Propósito |
+|---|---|
+| `docs/progress/SESSION_STATE.md` | Estado da sessão atual |
+| `docs/progress/PROJECT_CHECKPOINT.md` | Checkpoint completo do projeto |
+| `docs/progress/NEXT_STEPS.md` | Próximos passos pendentes |
+| `docs/progress/DECISIONS.md` | Decisões arquiteturais |
+| `docs/progress/PENDING.md` | Tarefas pendentes |
+| `docs/progress/CURRENT_PHASE.md` | Fase atual do desenvolvimento |
 
 ---
 

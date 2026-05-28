@@ -134,7 +134,7 @@ class LicenseExpiredError(LicenseError):
         super().__init__("Licenca expirada", "LICENSE_EXPIRED")
 
 
-Class LicenseRevokedError(LicenseError):
+class LicenseRevokedError(LicenseError):
     def __init__(self):
         super().__init__("Licenca revogada", "LICENSE_REVOKED")
 

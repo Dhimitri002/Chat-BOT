@@ -746,7 +746,7 @@ class WhatsAppSessionConnection:
             try:
                 await self._poll_task
             except asyncio.CancelledError:
-            pass
+                pass
             self._poll_task = None
 
         if self._health_task:
@@ -754,7 +754,7 @@ class WhatsAppSessionConnection:
             try:
                 await self._health_task
             except asyncio.CancelledError:
-            pass
+                pass
             self._health_task = None
 
         if self._qr_expiry_task:
@@ -762,7 +762,7 @@ class WhatsAppSessionConnection:
             try:
                 await self._qr_expiry_task
             except asyncio.CancelledError:
-            pass
+                pass
             self._qr_expiry_task = None
 
         # Tell the connector to disconnect

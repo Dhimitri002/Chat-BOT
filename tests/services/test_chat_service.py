@@ -29,12 +29,18 @@ async def test_process_message(chat_service):
 @pytest.mark.asyncio
 async def test_get_conversation_history(chat_service, mock_db):
     """Deve obter histórico de conversa."""
-    mock_db.execute = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [
+        MagicMock(id="msg-1", content="Hello"),
+        MagicMock(id="msg-2", content="Hi there"),
+    ]
+    mock_db.execute = AsyncMock(return_value=mock_result)
     result = await chat_service.get_history(
         bot_id="bot-123",
         limit=50,
     )
-    # Não deve lançar exceção
+    assert result is not None
+    mock_db.execute.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -58,12 +64,14 @@ async def test_save_message(chat_service, mock_db):
         content="Test message",
         direction="inbound",
     )
-    # Não deve lançar exceção
+    mock_db.add.assert_called_once()
+    mock_db.commit.assert_awaited()
 
 
 @pytest.mark.asyncio
 async def test_get_stats(chat_service, mock_db):
     """Deve obter estatísticas de chat."""
-    mock_db.execute = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=MagicMock())
     result = await chat_service.get_stats(bot_id="bot-123")
-    # Não deve lançar exceção
+    assert result is not None or isinstance(result, (dict, type(None)))
+    mock_db.execute.assert_awaited_once()

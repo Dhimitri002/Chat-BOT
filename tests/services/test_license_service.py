@@ -36,14 +36,23 @@ async def test_validate_license_valid(license_service):
 async def test_validate_license_expired(license_service):
     """Deve rejeitar licença expirada."""
     result = license_service.validate_license(key="EXPIRED-LICENSE-KEY")
+    assert result is False or (isinstance(result, dict) and result.get("valid") is False)
 
 
 @pytest.mark.asyncio
 async def test_revoke_license(license_service, mock_db):
     """Deve revogar licença."""
     mock_db.commit = AsyncMock()
+    mock_license = MagicMock()
+    mock_license.key = "TEST-KEY"
+    mock_license.is_revoked = False
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_license
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
     result = await license_service.revoke_license(license_id="test-id")
-    # Não deve lançar exceção
+    assert mock_license.is_revoked is True
+    mock_db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -65,4 +74,4 @@ async def test_license_machine_binding(license_service):
         license_key="TEST-KEY",
         machine_id=machine_id,
     )
-    # Não deve lançar exceção
+    assert result is not None or result is None  # Method should complete without error

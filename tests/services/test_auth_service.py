@@ -39,16 +39,22 @@ async def test_create_user(auth_service, mock_db):
 async def test_authenticate_user_success(auth_service, mock_db):
     """Deve autenticar usuário com credenciais válidas."""
     mock_user = MagicMock()
+    mock_user.email = "test@example.com"
     mock_user.hashed_password = "hashed_pw"
     mock_user.is_active = True
 
-    with patch("backend.services.auth_service.get_password_hash", return_value="hashed_pw"):
-        with patch("backend.services.auth_service.pwd_context") as mock_pwd:
-            mock_pwd.verify.return_value = True
-            result = await auth_service.authenticate_user(
-                email="test@example.com",
-                password="Senha@123",
-            )
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_user
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    with patch("backend.services.auth_service.pwd_context") as mock_pwd:
+        mock_pwd.verify.return_value = True
+        result = await auth_service.authenticate_user(
+            email="test@example.com",
+            password="Senha@123",
+        )
+    assert result is not None
+    assert result.email == "test@example.com"
 
 
 @pytest.mark.asyncio
