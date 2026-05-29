@@ -22,13 +22,13 @@ pydantic==2.10.0
 pydantic-settings==2.7.1
 alembic==1.14.0
 starlette==0.41.3
-python-multipart==0.0.7
+python-multipart==0.0.27
 
 # ─── Authentication & Security ─────────────────────────────────────────────────
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]==3.4.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.2.0
-cryptography==43.0.0
+cryptography==46.0.7
 pyjwt==2.10.1
 pytz==2024.1
 python-slugify==8.0.4
@@ -45,8 +45,8 @@ beanie==1.27.0
 
 # ─── HTTP & API ────────────────────────────────────────────────────────────────
 httpx==0.28.1
-aiohttp==3.11.11
-requests==2.32.3
+aiohttp==3.13.4
+requests==2.33.0
 urllib3==2.3.0
 websockets==14.1
 python-socketio==5.12.0
@@ -137,7 +137,7 @@ google-cloud-speech==2.26.0
 azure-cognitiveservices-speech==1.36.2
 
 # ─── Vision & Image Processing ────────────────────────────────────────────────
-pillow==11.1.0
+pillow==12.2.0
 opencv-python==4.11.0
 opencv-contrib-python==4.11.0
 scikit-image==0.24.0
@@ -161,7 +161,7 @@ plyer==2.1.0
 buildozer==1.5.0
 
 # ─── Configuration & Environment ──────────────────────────────────────────────
-python-dotenv==1.1.0
+python-dotenv==1.2.2
 confuse==2.0.1
 environs==11.3.0
 dynaconf==3.2.4
@@ -222,7 +222,7 @@ streamlit==1.42.1
 bokeh==3.5.2
 
 # ─── Testing ───────────────────────────────────────────────────────────────────
-pytest==8.3.4
+pytest==9.0.3
 pytest-asyncio==0.25.2
 pytest-cov==6.0.0
 pytest-xdist==3.8.1
@@ -234,7 +234,7 @@ asgi-lifespan==2.1.0
 
 # ─── Code Quality & Linting ────────────────────────────────────────────────────
 ruff==0.9.2
-black==24.10.0
+black==26.3.1
 isort==5.13.2
 pylint==3.3.1
 flake8==7.1.1
