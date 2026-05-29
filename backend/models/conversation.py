@@ -15,7 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from typing import List, Optional
-from backend.database import Base
+from backend.models.base import Base
 
 
 class Conversation(Base):

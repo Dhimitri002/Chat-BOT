@@ -1,0 +1,14 @@
+# 🌸 Flora Platform — Bot Automation Channels
+
+# WhatsApp
+twilio>=9.4.0
+pywhatkit>=5.4
+selenium>=4.27.0
+playwright>=1.49.0
+
+# Telegram
+aiogram>=3.15.0
+pytelegrambotapi>=4.25.0
+
+# Webhook / REST
+flask>=3.1.0

@@ -3,8 +3,11 @@ Flora Platform — Bot Model
 """
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
+
 from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from backend.models.base import Base
 
 
@@ -22,7 +25,8 @@ class Bot(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    whatsapp_session_id: Mapped[str] = mapped_column(String(36), ForeignKey("whatsapp_sessions.id", ondelete="SET NULL"), nullable=True, index=True)
+    # whatsapp_session_id stored as plain string (no FK to avoid circular refs with WhatsAppSession.bot_id)
+    whatsapp_session_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default=BotStatus.DISCONNECTED, nullable=False, index=True)
     config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -47,7 +51,7 @@ class Bot(Base):
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="bots", lazy="select")
-    whatsapp_session: Mapped["WhatsAppSession"] = relationship("WhatsAppSession", back_populates="bot", uselist=False, lazy="select")
+    # Relationship resolved via WhatsAppSession.bot (UNIQUE bot_id FK)
     intents: Mapped[list["Intent"]] = relationship("Intent", back_populates="bot", cascade="all, delete-orphan", lazy="select")
     commands: Mapped[list["Command"]] = relationship("Command", back_populates="bot", cascade="all, delete-orphan", lazy="select")
     memories: Mapped[list["Memory"]] = relationship("Memory", back_populates="bot", cascade="all, delete-orphan", lazy="select")

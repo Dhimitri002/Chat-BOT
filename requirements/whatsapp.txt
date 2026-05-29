@@ -1,0 +1,29 @@
+# 🌸 Flora Platform — WhatsApp Integration
+
+# WhatsApp via Twilio API
+twilio>=9.4.0
+
+# WhatsApp via Python (alternative)
+pywhatkit>=5.4
+whatsapp-web.py>=1.0.0
+
+# Automation
+selenium>=4.27.0
+playwright>=1.49.0
+
+# WebSockets
+websockets>=14.0
+python-socketio[asyncio_client]>=5.12.0
+
+# Telegram (alternative channel)
+pytelegrambotapi>=4.25.0
+aiogram>=3.15.0
+
+# Push Notifications
+fcm-django>=2.0.0
+pyfcm>=2.0.0
+apns2>=0.7.0
+
+# SMS Gateway
+nexmo>=2.5.0
+messagebird>=2.2.0

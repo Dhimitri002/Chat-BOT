@@ -1,0 +1,21 @@
+# 🌸 Flora Platform — Platform-Specific Dependencies
+
+# Linux
+uvloop>=0.21.0; sys_platform != "win32"
+python-apt>=2.6.0; sys_platform == "linux"
+
+# Windows
+pywin32>=308; sys_platform == "win32"
+winshell>=0.6; sys_platform == "win32"
+colorama>=0.4.6; sys_platform == "win32"
+
+# macOS
+objc>=10.0; sys_platform == "darwin"
+
+# Android (Buildozer)
+android>=0.1.1; sys_platform == "linux"
+jnius>=1.1.0; sys_platform == "linux"
+
+# Mobile Build
+buildozer>=1.5.0; sys_platform == "linux"
+python-for-android>=2024.0.0; sys_platform == "linux"

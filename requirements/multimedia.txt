@@ -1,0 +1,31 @@
+# 🌸 Flora Platform — Audio, Vision & Multimedia
+
+# Audio
+librosa>=0.10.0
+pydub>=0.25.0
+pyttsx3>=2.90
+gTTS>=2.5.0
+SpeechRecognition>=3.11.0
+faster-whisper>=1.1.0
+openai-whisper>=20240930
+
+# Vision
+opencv-python>=4.10.0
+opencv-contrib-python>=4.10.0
+pytesseract>=0.3.13
+easyocr>=1.7.0
+
+# Image
+pillow>=11.0.0
+pillow-heif>=0.21.0
+imageio>=2.36.0
+scikit-image>=0.24.0
+
+# TTS / Voice
+elevenlabs>=1.13.0
+azure-cognitiveservices-speech>=1.42.0
+bark>=0.1.0
+
+# Media formats
+ffmpeg-python>=0.2.0
+moviepy>=2.1.0

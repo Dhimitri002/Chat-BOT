@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.deps import get_current_user, get_db
 from backend.models.bot import Bot, BotStatus
 from backend.models.user import User
-from backend.schemas.bot import BotCreateRequest, BotResponse, BotUpdate
+from backend.schemas.bot import BotCreateRequest, BotResponse, BotUpdateRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bots", tags=["bots"])
@@ -93,7 +93,7 @@ async def create_bot(
 @router.put("/{bot_id}")
 async def update_bot(
     bot_id: str,
-    body: BotUpdate,
+    body: BotUpdateRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

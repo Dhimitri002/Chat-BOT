@@ -1,12 +1,20 @@
 {
   "session": "2026-05-28",
   "phase": "Phase 2 - Consolidation",
+  "commit": "6e6e1e2",
   "files_modified": [
     "backend/main.py",
     "app_cliente/screens/plans_screen.py",
     "backend/services/license_service.py",
     "backend/services/whatsapp_service.py",
-    "README.md"
+    "README.md",
+    "pytest.ini",
+    "tests/services/test_auth_service.py",
+    "tests/services/test_billing_service.py",
+    "tests/services/test_bot_service.py",
+    "tests/services/test_chat_service.py",
+    "tests/services/test_flora_service.py",
+    "tests/services/test_license_service.py"
   ],
   "files_created": [
     "docs/progress/SESSION_STATE.md",
@@ -16,6 +24,7 @@
     "docs/progress/PENDING.md",
     "docs/progress/DECISIONS.md",
     "docs/progress/CURRENT_PHASE.md",
+    "docs/progress/LAST_CONTEXT.json",
     "monitoring/__init__.py",
     "monitoring/health.py",
     "monitoring/metrics.py",
@@ -28,7 +37,10 @@
     "total_python_files": 247,
     "total_lines_python": 51000,
     "syntax_errors_fixed": 5,
-    "compile_pass_rate": "100%"
+    "stub_tests_fixed": 18,
+    "compile_pass_rate": "100%",
+    "test_files": 18,
+    "test_functions": "~63"
   },
   "next_priority": [
     "Merge duplicate app structures (apps/ into app_admin/app_cliente)",

@@ -6,7 +6,7 @@ setup(
     version="1.0.0",
     description="🌸 Plataforma Completa de Chatbots WhatsApp com Licenciamento",
     author="TiltzOff",
-    python_requires=">=3.11",
+    python_requires=">=3.13",
     packages=find_packages(exclude=["tests*", "docs*"]),
     install_requires=[
         "fastapi>=0.115.0",

@@ -2,11 +2,17 @@
 from typing import Optional
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Configurações da aplicação carregadas do .env."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="allow",
+    )
 
     # ── Segurança (OBRIGATÓRIO) ──────────────────────────
     SECRET_KEY: str = Field(..., min_length=32)
@@ -46,6 +52,12 @@ class Settings(BaseSettings):
     """Argon2 parallelism factor."""
     PASSWORD_MIN_LENGTH: int = Field(default=8)
     """Minimum password length."""
+    PASSWORD_REQUIRE_UPPERCASE: bool = Field(default=True)
+    """Require uppercase letters in passwords."""
+    PASSWORD_REQUIRE_LOWERCASE: bool = Field(default=True)
+    """Require lowercase letters in passwords."""
+    PASSWORD_REQUIRE_DIGITS: bool = Field(default=True)
+    """Require digits in passwords."""
     PASSWORD_REQUIRE_SPECIAL: bool = Field(default=True)
     """Require special characters in passwords."""
 
@@ -62,7 +74,18 @@ class Settings(BaseSettings):
     # ── App ───────────────────────────────────────────────
     APP_NAME: str = Field(default="Flora Platform")
     APP_VERSION: str = Field(default="1.0.0")
-    ENVIRONMENT: str = Field(default="development")
+    APP_ENV: str = Field(default="development")
+    """App environment (development/staging/production)."""
+    APP_DEBUG: bool = Field(default=False)
+    """Enable debug mode."""
+    APP_HOST: str = Field(default="0.0.0.0")
+    """Server bind address."""
+    APP_PORT: int = Field(default=8000)
+    """Server port."""
+    APP_URL: str = Field(default="http://localhost:8000")
+    """Public app URL."""
+    ENVIRONMENT: str = Field(default="development", alias="ENV")
+    """Legacy alias for APP_ENV."""
 
     # ── Banco de Dados ─────────────────────────────────────
     DATABASE_URL: str = Field(default="sqlite+aiosqlite:///./flora.db")
@@ -81,6 +104,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = Field(default=["*"])
 
     # ── JWT ────────────────────────────────────────────────
+    JWT_SECRET: str = Field(default="", description="JWT signing secret (falls back to SECRET_KEY if empty)")
     JWT_ALGORITHM: str = Field(default="HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30)
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7)
@@ -89,9 +113,17 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = Field(default="groq")
     GROQ_API_KEY: Optional[str] = Field(default=None)
     GEMINI_API_KEY: Optional[str] = Field(default=None)
+    GOOGLE_API_KEY: Optional[str] = Field(default=None, description="Alias for GEMINI_API_KEY / Google Cloud")
     OPENAI_API_KEY: Optional[str] = Field(default=None)
     ANTHROPIC_API_KEY: Optional[str] = Field(default=None)
     OPENROUTER_API_KEY: Optional[str] = Field(default=None)
+    MISTRAL_API_KEY: Optional[str] = Field(default=None)
+    COHERE_API_KEY: Optional[str] = Field(default=None)
+    OLLAMA_BASE_URL: str = Field(default="http://localhost:11434")
+
+    # ── Admin Default Account ───────────────────────────────
+    ADMIN_EMAIL: str = Field(default="admin@flora.local")
+    ADMIN_PASSWORD: str = Field(default="change-me-in-production")
 
     # ── WhatsApp ───────────────────────────────────────────
     WHATSAPP_API_URL: str = Field(default="")
@@ -99,6 +131,7 @@ class Settings(BaseSettings):
 
     # ── Logging ────────────────────────────────────────────
     LOG_LEVEL: str = Field(default="INFO")
+    LOG_FILE: str = Field(default="./logs/flora.log")
 
     # ── Backup ─────────────────────────────────────────────
     BACKUP_ENCRYPTION_KEY: Optional[str] = Field(default=None)
@@ -108,7 +141,9 @@ class Settings(BaseSettings):
     SUPPORT_EMAIL: str = Field(default="support@flora.bot")
 
     # ── Rate Limiting ──────────────────────────────────────
+    RATE_LIMIT_ENABLED: bool = Field(default=True)
     RATE_LIMIT_REQUESTS: int = Field(default=100)
+    RATE_LIMIT_REQUESTS_PER_MINUTE: int = Field(default=60)
     RATE_LIMIT_WINDOW: int = Field(default=60)
     RATE_LIMIT_WINDOW_SECONDS: int = Field(default=60)
     """Window in seconds for the rate limiting middleware."""
@@ -171,9 +206,6 @@ class Settings(BaseSettings):
             raise ValueError("PASSWORD_MIN_LENGTH must be at least 6")
         return v
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
         case_sensitive = True
 
 

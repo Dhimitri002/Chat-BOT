@@ -17,6 +17,28 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger("audit")
 
 
+class AuditAction(str, Enum):
+    LOGIN = "login"
+    LOGOUT = "logout"
+    LOGIN_FAILED = "login_failed"
+    REGISTER = "register"
+    PASSWORD_CHANGE = "password_change"
+    TOKEN_REFRESH = "token_refresh"
+    CREATE = "create"
+    UPDATE = "update"
+    DELETE = "delete"
+    VIEW = "view"
+    EXPORT = "export"
+    LICENSE_GENERATE = "license_generate"
+    LICENSE_REVOKE = "license_revoke"
+    LICENSE_VALIDATE = "license_validate"
+    WHATSAPP_CONNECT = "whatsapp_connect"
+    WHATSAPP_DISCONNECT = "whatsapp_disconnect"
+    SETTINGS_CHANGE = "settings_change"
+    MFA_ENABLE = "mfa_enable"
+    MFA_DISABLE = "mfa_disable"
+
+
 class AuditSeverity(str, Enum):
     INFO = "info"
     WARNING = "warning"

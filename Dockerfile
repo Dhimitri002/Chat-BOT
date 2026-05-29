@@ -1,5 +1,5 @@
 # 🌸 Flora Platform — Dockerfile (Backend)
-FROM python:3.11-slim AS base
+FROM python:3.13-slim AS base
 
 # Metadados
 LABEL maintainer="TiltzOff <contato@flora.com>"

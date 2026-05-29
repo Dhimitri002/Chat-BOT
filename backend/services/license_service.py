@@ -22,7 +22,8 @@ from backend.core.encryption import (
     validate_license_key_format,
     verify_hardware_fingerprint,
 )
-from backend.models.audit_log import AuditAction, AuditLog, AuditSeverity
+from backend.models.audit_log import AuditLog
+from backend.security.audit import AuditAction, AuditSeverity
 from backend.models.license import License, LicenseStatus, LicenseTransferHistory
 from backend.models.plan import Plan
 from backend.models.user import User

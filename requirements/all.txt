@@ -1,0 +1,17 @@
+# 🌸 Flora Platform — All Dependencies (Full Installation)
+# Install with: pip install -r requirements/all.txt
+
+-r base.txt
+-r llm.txt
+-r frontend.txt
+-r database.txt
+-r whatsapp.txt
+-r rag.txt
+-r multimedia.txt
+-r testing.txt
+-r code-quality.txt
+-r docs.txt
+-r dev.txt
+-r security.txt
+-r analytics.txt
+-r docker.txt

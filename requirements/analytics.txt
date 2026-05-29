@@ -1,0 +1,31 @@
+# 🌸 Flora Platform — Analytics & Data Science
+
+# Analytics
+mixpanel>=4.10.0
+segment-analytics-python>=2.3.0
+google-analytics-data>=0.18.0
+posthog>=3.7.0
+
+# Data Science
+jupyter>=1.1.0
+notebook>=7.3.0
+ipywidgets>=8.1.0
+
+# Visualization
+plotly>=5.24.0
+matplotlib>=3.9.0
+seaborn>=0.13.0
+graphviz>=0.20.0
+diagrams>=0.24.0
+
+# Data Processing
+pandas>=2.2.0
+polars>=1.17.0
+pyarrow>=18.0.0
+openpyxl>=3.1.0
+xlsxwriter>=3.2.0
+
+# ORM Admin
+sqladmin>=0.20.0
+starlette-admin>=0.14.0
+piccolo-admin>=1.5.0

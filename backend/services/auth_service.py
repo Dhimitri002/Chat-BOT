@@ -31,7 +31,8 @@ from backend.core.security import (
     validate_password_strength,
     verify_password,
 )
-from backend.models.audit_log import AuditAction, AuditLog, AuditSeverity
+from backend.models.audit_log import AuditLog
+from backend.security.audit import AuditAction, AuditSeverity
 from backend.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ class AccountLockoutManager:
         self._max_attempts = max_attempts
         self._lockout_window = lockout_window
         self._lockout_duration = lockout_duration
-        self._entries: dict[str, _LockoutEntry] = defaultdict(_Lockout_entry)
+        self._entries: dict[str, _LockoutEntry] = defaultdict(_LockoutEntry)
 
     def is_locked(self, identifier: str) -> bool:
         """Check if an account is currently locked."""

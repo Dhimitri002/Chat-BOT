@@ -1,0 +1,53 @@
+# 🌸 Flora Platform — LLM Providers (Multi-LLM Router)
+
+# OpenAI / OpenAI-compatible
+openai>=1.57.0
+tiktoken>=0.8.0
+
+# Anthropic (Claude)
+anthropic>=0.42.0
+
+# Google Gemini
+google-generativeai>=0.8.3
+vertexai>=1.71.0
+google-cloud-aiplatform>=1.76.0
+
+# Groq
+groq>=0.13.0
+
+# Cohere
+cohere>=5.13.0
+
+# Mistral
+# mistralai (pip: mistral-core)
+
+# Local Models
+ollama>=0.4.4
+llama-cpp-python>=0.3.2
+ctransformers>=0.2.27
+gpt4all>=2.8.2
+transformers>=4.47.0
+accelerate>=1.2.0
+bitsandbytes>=0.45.0
+peft>=0.14.0
+safetensors>=0.5.0
+
+# LangChain / Orchestration
+langchain>=0.3.12
+langchain-community>=0.3.12
+langchain-openai>=0.2.12
+langchain-anthropic>=0.3.1
+langchain-groq>=0.2.1
+langchain-google-genai>=2.0.7
+langgraph>=0.2.59
+
+# Routing / Load Balancing
+litellm>=1.56.0
+adaptive-limiter>=1.0.0
+
+# HuggingFace Ecosystem
+huggingface-hub>=0.27.0
+tokenizers>=0.21.0
+
+# Sentence Transformers (embeddings)
+sentence-transformers>=3.3.1

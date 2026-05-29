@@ -32,8 +32,11 @@
 - Monitoring uses background async task + middleware for metrics collection
 
 ### Next Session Priority:
-1. Create continuity system (checkpoints, worklog, decisions)
-2. Remove `integrated-api/` empty directory  
-3. Create monitoring module
-4. Merge `apps/` into primary apps (or update run.py)
-5. Update README
+1. ✅ Create continuity system (checkpoints, worklog, decisions)
+2. ✅ Remove `integrated-api/` empty directory  
+3. ✅ Create monitoring module
+4. ✅ Update README
+5. ✅ Fix stub tests
+6. 🔄 Merge `apps/` into primary apps (or update run.py)
+7. ⏳ Connect Flora AI brain to backend API
+8. ⏳ Implement WhatsApp QR code connection flow

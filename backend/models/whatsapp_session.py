@@ -40,7 +40,11 @@ class WhatsAppSession(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
-    bot: Mapped["Bot"] = relationship("Bot", back_populates="whatsapp_session", lazy="select")
+    bot: Mapped["Bot"] = relationship(
+        "Bot",
+        lazy="select",
+        foreign_keys="[WhatsAppSession.bot_id]",
+    )
 
     def __repr__(self):
         return f"<WhatsAppSession(bot={self.bot_id}, status={self.status})>"

@@ -1,0 +1,25 @@
+# 🌸 Flora Platform — Database Drivers & ORM
+
+# PostgreSQL
+asyncpg>=0.30.0
+psycopg2-binary>=2.9.10
+
+# MongoDB (async)
+motor>=3.6.0
+pymongo>=4.10.0
+beanie>=1.27.0
+
+# Redis
+redis[hiredis]>=5.2.0
+
+# ORM
+sqlalchemy[asyncio]>=2.0.36
+sqlmodel>=0.0.22
+tortoise-orm[asyncpg]>=0.22.0
+
+# Migrations
+alembic>=1.14.0
+pymigration>=0.3.0
+
+# SQLite (dev)
+aiosqlite>=0.20.0

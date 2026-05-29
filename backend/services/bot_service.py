@@ -7,14 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.bot import Bot
 from backend.models.message import Message
-from backend.schemas.bot import BotCreate, BotUpdate
+from backend.schemas.bot import BotCreateRequest, BotUpdateRequest
 
 
 class BotService:
     """Serviço de gerenciamento de bots."""
 
     @staticmethod
-    async def create_bot(db: AsyncSession, user_id: str, data: BotCreate) -> Bot:
+    async def create_bot(db: AsyncSession, user_id: str, data: BotCreateRequest) -> Bot:
         """Cria um novo bot."""
         bot = Bot(
             id=str(uuid4()),
@@ -74,7 +74,7 @@ class BotService:
 
     @staticmethod
     async def update_bot(
-        db: AsyncSession, bot_id: str, user_id: str, data: BotUpdate
+        db: AsyncSession, bot_id: str, user_id: str, data: BotUpdateRequest
     ) -> Optional[Bot]:
         """Atualiza um bot existente."""
         bot = await BotService.get_bot(db, bot_id, user_id)

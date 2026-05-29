@@ -51,6 +51,11 @@ from app_admin.screens.bots_screen import BotsScreen
 from app_admin.screens.analytics_screen import AnalyticsScreen
 from app_admin.screens.settings_screen import SettingsScreen
 
+# ── Additional screens (consolidated from apps/admin/) ──────────────────────
+from app_admin.screens.bot_form_screen import BotFormScreen
+from app_admin.screens.license_form_screen import LicenseFormScreen
+from app_admin.screens.whatsapp_screen import AdminWhatsAppScreen
+
 
 KV_ADMIN = """
 #:import get_color_from_hex kivy.utils.get_color_from_hex
@@ -231,6 +236,11 @@ class FloraAdminApp(MDApp):
         self.screen_manager.add_widget(BotsScreen(self, name="bots"))
         self.screen_manager.add_widget(AnalyticsScreen(self, name="analytics"))
         self.screen_manager.add_widget(SettingsScreen(self, name="settings"))
+
+        # ── Consolidated screens from apps/admin/ ──────────────────────────
+        self.screen_manager.add_widget(BotFormScreen(self, name="bot_form"))
+        self.screen_manager.add_widget(LicenseFormScreen(self, name="license_form"))
+        self.screen_manager.add_widget(AdminWhatsAppScreen(self, name="whatsapp_admin"))
 
         return self.screen_manager
 

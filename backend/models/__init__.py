@@ -4,7 +4,7 @@ Flora Platform — Models
 from backend.models.base import Base
 from backend.models.user import User, UserRole
 from backend.models.plan import Plan
-from backend.models.license import License
+from backend.models.license import License, LicenseStatus, LicenseTransferHistory
 from backend.models.subscription import Subscription, SubscriptionStatus
 from backend.models.bot import Bot, BotStatus
 from backend.models.whatsapp_session import WhatsAppSession, SessionStatus

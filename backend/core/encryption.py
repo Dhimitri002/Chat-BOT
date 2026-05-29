@@ -55,7 +55,20 @@ class FernetEncryptor:
                            "Set ENCRYPTION_KEY in .env for production.")
             raw_key = Fernet.generate_key().decode()
         if isinstance(raw_key, str):
-            raw_key = raw_key.encode()
+            import base64
+            try:
+                # Try to decode as-is (may already be valid base64)
+                decoded = base64.urlsafe_b64decode(raw_key)
+                if len(decoded) == 32:
+                    pass  # valid key
+                else:
+                    # Not 32 bytes — derive one via SHA-256
+                    import hashlib
+                    raw_key = base64.urlsafe_b64encode(hashlib.sha256(raw_key.encode()).digest()).decode()
+            except Exception:
+                # Not valid base64 — hash the raw string to derive a key
+                import hashlib
+                raw_key = base64.urlsafe_b64encode(hashlib.sha256(raw_key.encode()).digest()).decode()
         self._fernet = Fernet(raw_key)
 
     @staticmethod

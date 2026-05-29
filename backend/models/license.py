@@ -1,11 +1,23 @@
-"""
-Flora Platform — License Model
-"""
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
+
 from sqlalchemy import String, Integer, DateTime, Boolean, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from backend.models.base import Base
+
+
+class LicenseStatus(str, Enum):
+    """License lifecycle states."""
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+    SUSPENDED = "suspended"
+    PENDING = "pending"
 
 
 class License(Base):
@@ -52,3 +64,18 @@ class License(Base):
             return -1  # Ilimitado
         delta = self.expires_at - datetime.now(timezone.utc)
         return max(0, delta.days)
+
+
+class LicenseTransferHistory(Base):
+    __tablename__ = "license_transfer_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    license_id: Mapped[str] = mapped_column(String(36), ForeignKey("licenses.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_user_id: Mapped[str] = mapped_column(String(36), nullable=True)
+    to_user_id: Mapped[str] = mapped_column(String(36), nullable=True)
+    old_hardware_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    new_hardware_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    transferred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    license_ref: Mapped["License"] = relationship("License", lazy="select")

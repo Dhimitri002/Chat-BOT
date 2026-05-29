@@ -2,6 +2,16 @@
 # Flora Platform — Dependencies (Python 3.13.13)
 # Mais de 120 bibliotecas com suporte a LLMs, APIs, Backend, Frontend e Utilities
 # ═══════════════════════════════════════════════════════════════════════════════════
+#
+# ⚡ MODULAR INSTALL (recommended):
+#   pip install -r requirements/minimal.txt     # Quickstart (backend + LLM)
+#   pip install -r requirements/all.txt          # Full install (everything)
+#   pip install -r requirements/base.txt         # Backend only
+#   pip install -r requirements/frontend.txt     # KivyMD apps only
+#   pip install -r requirements/llm.txt          # LLM providers only
+#
+# This file contains ALL packages for backward compatibility.
+# ═══════════════════════════════════════════════════════════════════════════════════
 
 # ─── Backend Core ──────────────────────────────────────────────────────────────
 fastapi==0.115.5
@@ -17,22 +27,21 @@ python-multipart==0.0.7
 # ─── Authentication & Security ─────────────────────────────────────────────────
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-bcrypt==4.2.2
-cryptography==44.0.0
+bcrypt==4.2.0
+cryptography==43.0.0
 pyjwt==2.10.1
-pytz==2025.1
+pytz==2024.1
 python-slugify==8.0.4
 
-# ─── Database & ORM ────────────────────────────────────────────────────────────
-psycopg2-binary==2.9.13
-psycopg==3.2.3
+# ─── Database & ORM ────────────────────────────────────────────────────────
+psycopg2-binary==2.9.12
+psycopg==3.2.1
 pymongo==4.10.1
-redis==5.2.1
-motor==3.6.0
-sqlmodel==0.0.22
-tortoise-orm==0.21.6
-beanie==1.28.0
-async-sqlalchemy==0.1.1
+redis==5.2.0
+motor==3.5.1
+sqlmodel==0.0.21
+tortoise-orm==0.20.1
+beanie==1.27.0
 
 # ─── HTTP & API ────────────────────────────────────────────────────────────────
 httpx==0.28.1
@@ -46,20 +55,18 @@ aiofiles==24.1.0
 
 # ─── LLMs: OpenAI ──────────────────────────────────────────────────────────────
 openai==1.59.5
-openai-whisper==20231214
+
 tiktoken==0.7.0
 
 # ─── LLMs: Anthropic Claude ────────────────────────────────────────────────────
 anthropic==0.42.0
 
 # ─── LLMs: Google Gemini ───────────────────────────────────────────────────────
-google-generativeai==0.8.3
-google-cloud-aiplatform==1.79.0
-google-cloud-vertexai==1.79.0
-google-auth==2.37.0
-google-api-python-client==1.36.0
-google-auth-oauthlib==1.2.1
-google-auth-httplib2==0.2.0
+google-generativeai==0.8.0
+google-cloud-aiplatform==1.70.0
+google-auth==2.30.0
+google-api-python-client==2.100.0
+google-auth-oauthlib==1.2.0
 
 # ─── LLMs: Groq ────────────────────────────────────────────────────────────────
 groq==0.15.0
@@ -68,15 +75,15 @@ groq==0.15.0
 cohere==5.15.0
 
 # ─── LLMs: HuggingFace Transformers ────────────────────────────────────────────
-transformers==4.46.2
-torch==2.5.1
-torchvision==0.20.1
-torchaudio==2.5.1
-datasets==3.2.0
-tokenizers==0.20.3
-huggingface-hub==0.24.6
-accelerate==1.3.0
-optimum==1.24.1
+transformers==4.42.0
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+datasets==2.20.0
+tokenizers==0.19.1
+huggingface-hub==0.23.4
+accelerate==0.31.0
+optimum==1.21.3
 
 # ─── LLMs: LLaMA & Open Source Models ──────────────────────────────────────────
 llama-cpp-python==0.3.3
@@ -125,47 +132,42 @@ oobabooga==0.1.0
 pydub==0.25.1
 librosa==0.10.2
 soundfile==0.12.1
-pyaudio==0.2.14
 pyttsx3==2.90
-google-cloud-speech==2.32.1
-azure-cognitiveservices-speech==1.43.0
+google-cloud-speech==2.26.0
+azure-cognitiveservices-speech==1.36.2
 
 # ─── Vision & Image Processing ────────────────────────────────────────────────
 pillow==11.1.0
 opencv-python==4.11.0
 opencv-contrib-python==4.11.0
 scikit-image==0.24.0
-image-processing==1.1.12
-pytesseract==0.3.13
-easyocr==1.7.2
+pytesseract==0.3.10
+easyocr==1.7.0
 
 # ─── WhatsApp & Messaging ──────────────────────────────────────────────────────
-twilio==10.3.0
-selenium==4.28.1
-pyselenium==3.14.1
-pytelegrambotapi==4.28.0
-python-telegram-bot==21.8
+twilio==9.3.2
+selenium==4.24.0
+pytelegrambotapi==4.27.0
+python-telegram-bot==21.3
 
 # ─── UI/UX (KivyMD + Kivy) ────────────────────────────────────────────────────
 kivy==2.3.1
 kivymd==1.2.0
 pygments==2.18.0
-pillow-simd==11.1.0.dev3
 pygame==2.6.1; sys_platform == "win32"
-pywin32==308; sys_platform == "win32"
+pywin32==306; sys_platform == "win32"
 cython==3.0.11
 plyer==2.1.0
 buildozer==1.5.0
 
 # ─── Configuration & Environment ──────────────────────────────────────────────
 python-dotenv==1.1.0
-pydantic-dotenv==0.1.0
 confuse==2.0.1
-environs==11.4.0
-dynaconf==3.2.7
+environs==11.3.0
+dynaconf==3.2.4
 toml==0.10.2
-ruamel.yaml==0.18.7
-tomli==2.1.0
+ruamel.yaml==0.18.6
+tomli==2.0.1
 
 # ─── Logging & Monitoring ─────────────────────────────────────────────────────
 loguru==0.7.2
@@ -181,13 +183,13 @@ colorama==0.4.6
 termcolor==2.4.0
 tabulate==0.9.0
 tqdm==4.67.1
-progressbar33==1.11.1
-python-dateutil==2.9.0
-arrow==1.3.0
-pendulum==3.0.0
-schedule==1.2.2
+progressbar33==1.10.0
+python-dateutil==2.8.2
+arrow==1.2.3
+pendulum==2.1.2
+schedule==1.2.0
 APScheduler==3.10.4
-psutil==6.1.0
+psutil==6.0.0
 py-cpuinfo==9.0.0
 gputil==1.4.0
 
@@ -259,19 +261,18 @@ anyio==4.8.0
 sniffio==1.3.2
 
 # ─── Documentation ────────────────────────────────────────────────────────────
-sphinx==8.2.1
-sphinx-rtd-theme==2.1.2
-sphinx-autodoc-typehints==2.5.0
-mkdocs==1.6.1
-mkdocs-material==9.5.48
+sphinx==7.2.6
+sphinx-rtd-theme==2.0.0
+sphinx-autodoc-typehints==2.0.0
+mkdocs==1.5.3
+mkdocs-material==9.5.28
 
 # ─── Dev Utilities ────────────────────────────────────────────────────────────
 ipdb==0.13.13
 pdbpp==0.10.3
-ptpython==3.0.29
-watchfiles==0.24.0
-watchdog==4.1.3
-reload==1.0.0
+ptpython==3.0.28
+watchfiles==0.21.0
+watchdog==4.0.1
 
 # ─── Build & Package Management ────────────────────────────────────────────────
 setuptools==75.6.0
@@ -281,7 +282,7 @@ build==1.2.2.post1
 poetry==1.8.4
 
 # ─── Optional/Advanced Libraries ──────────────────────────────────────────────
-pydantic-core==2.27.1
-typing-extensions==4.12.2
-emoji==2.12.0
-qrcode==8.0.0
+pydantic-core==2.20.1
+typing-extensions==4.12.0
+emoji==2.10.0
+qrcode[pil]==8.0

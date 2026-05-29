@@ -53,6 +53,14 @@ from app_cliente.screens.onboarding_screen import OnboardingScreen
 from app_cliente.screens.bot_create_screen import BotCreateScreen
 from app_cliente.screens.flora_chat_screen import FloraChatScreen
 
+# ── Additional screens (consolidated from apps/client/) ────────────────────
+from app_cliente.screens.license_screen2 import LicenseScreen as LicenseScreen2
+from app_cliente.screens.bot_config_screen import BotConfigScreen
+from app_cliente.screens.intents_screen import IntentsScreen
+from app_cliente.screens.whatsapp_qr_screen import WhatsAppQrScreen
+from app_cliente.screens.profile_screen2 import ProfileScreen as ProfileScreen2
+from app_cliente.screens.settings_screen2 import SettingsScreen as SettingsScreen2
+
 try:
     from app_cliente.services.auth import AuthService
 except ImportError:
@@ -196,6 +204,14 @@ class FloraApp(MDApp):
         sm.add_widget(BotCreateScreen(name="bot_create"))
         sm.add_widget(FloraChatScreen(name="flora_chat"))
 
+        # ── Consolidated screens from apps/client/ ──────────────────────
+        sm.add_widget(LicenseScreen2(name="license"))
+        sm.add_widget(BotConfigScreen(name="bot_config"))
+        sm.add_widget(IntentsScreen(name="intents"))
+        sm.add_widget(WhatsAppQrScreen(name="whatsapp_qr"))
+        sm.add_widget(ProfileScreen2(name="profile"))
+        sm.add_widget(SettingsScreen2(name="settings_client"))
+
         sm.current = "splash"
 
         return sm
@@ -226,6 +242,12 @@ class FloraApp(MDApp):
             "onboarding": "home",
             "bot_create": "home",
             "flora_chat": "home",
+            "license": "home",
+            "bot_config": "home",
+            "intents": "home",
+            "whatsapp_qr": "home",
+            "profile": "home",
+            "settings_client": "home",
         }
         current = self.root.current
         if current in back_map:

@@ -1,0 +1,5 @@
+# 🌸 Flora Platform — Minimal Dependencies (Quickstart)
+# Install with: pip install -r requirements/minimal.txt
+
+-r base.txt
+-r llm.txt
